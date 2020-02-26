@@ -35,9 +35,10 @@
 #include "driver/gpio.h"
 
 /*****************************************************************************/
-/* UART DEFINITIONS */
+/* DEFINITIONS */
 /*****************************************************************************/
 
+/* UART */
 #define IMU_TX      (GPIO_NUM_1)            /* UART TX Connected to BNO055 */
 #define IMU_RX      (GPIO_NUM_3)            /* UART RX Connected to BNO055 */
 #define RTS         (UART_PIN_NO_CHANGE)    /* Not using RTS */
@@ -45,12 +46,15 @@
 #define BUF_SIZE    (1024)                  /* UART Data Buffer */
 #define BAUD_RATE   (115200)                /* UART Baud Rate */
 
-/*****************************************************************************/
-/* START/STOP BUTTON DEFINITIONS */
-/*****************************************************************************/
+/* START/START PIN */
+#define START_STOP_PIN   33                         /* use pin 33 */
+#define START_STOP_MASK  (1ULL<<START_STOP_PIN)     /* create bit mask for setup call */
 
-#define START_STOP_PIN   33
-#define START_STOP_MASK  (1ULL<<START_STOP_PIN)
+/* LOOP TASK */
+#define LOOP_ACLLOC     (2048)  /* size of memory allocated to the loop() task */
+#define LOOP_PRIORITY   (10)    /* priority of the loop() task */
+
+/* IMU */
 
 /*****************************************************************************/
 /* INTERRUPT SERVICE ROUTINES */
@@ -68,8 +72,9 @@
                         1. UART for communication with BNO055.
                         2. START/START button pullup resistor and iterrupt setting.
     CALLING CONVENTION: init();
-    CONDITIONS AT EXIT: This function does not modify any global variables.  This function
-                        does not take any arguments and returns nothing.
+    CONDITIONS AT EXIT: This function modifies the state of UART pins 1 and 3.  It also configures
+                        the UART0 peripheral.  Additonally, it modifies the function of pin 33 to be
+                        a general purpose GPIO pin.
     DATE STARTED:       2/24/2020
     UPDATE HISTORY:     See Git logs.
     NOTES:              
@@ -104,34 +109,70 @@ static void init()
     start_stop.pull_up_en = GPIO_PULLUP_ENABLE;
     gpio_config(&start_stop);
     
+    /**************************************/
+    /* CONFIGURE BNO055 (IMU) */
+    /**************************************/
+    
 }
 
 /*****************************************************************************/
 /* TASKS */
 /*****************************************************************************/
 
-static void echo_task()
+/*  
+    NAME:               loop
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          app_main() in main.c
+    PURPOSE:            Handles the main loop of the application.  It handles the three
+                        states of READY (waiting for button press), RECORDING (recording
+                        IMU data and waiting for button press), PROCESSING (processing IMU
+                        data), and SENDING (sending processed data to the phone).
+    CALLING CONVENTION: This must be called as a task, so use the convention below.
+                        xTaskCreate(echo_task, "uart_echo_task", LOOP_ACLLOC, NULL, 10, NULL);
+    CONDITIONS AT EXIT: This task will not exit.
+    DATE STARTED:       2/26/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+static void loop()
 {
-    uint8_t *data = (uint8_t *) malloc(BUF_SIZE);
+    uint8_t *data = (uint8_t *) malloc(BUF_SIZE);   /* buffer for IMU data */
     
     while(1)
     {
-        /* wait for button to be pressed */
+        /**************************************/
+        /* WAIT FOR BUTTON PRESS */
+        /**************************************/
         if (gpio_get_level(GPIO_NUM_33) == 0) /* if button is pressed */
         {
-            int len = uart_read_bytes(UART_NUM_0, data, BUF_SIZE, 20 / portTICK_RATE_MS);
-            uart_write_bytes(UART_NUM_0, "a", 1);
-            vTaskDelay(50 / portTICK_PERIOD_MS);
+            /* debounce the button press */
+            vTaskDelay(50 / portTICK_PERIOD_MS);  
+
+            /**************************************/
+            /* READ IMU DATA */
+            /**************************************/
+            
         }
-        else
+        else    /* if button is not pressed */
         {
+            /* delay to feed the watchdog */
             vTaskDelay(50 / portTICK_PERIOD_MS);
         }
-        
     }
 }
 
-
+/*  
+    NAME:               app_main
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          main_task() in cpu_start.c
+    PURPOSE:            Initializes the necessary drivers and spins up the tasks.
+    CALLING CONVENTION: This function is only called by espressif libraries.
+    CONDITIONS AT EXIT: Creates tasks which run indefinitely.  Once this retunrs the
+                        main_task() is destroyed.
+    DATE STARTED:       2/26/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
 void app_main()
 {
     init();
