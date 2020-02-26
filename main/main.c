@@ -53,6 +53,10 @@
 #define START_STOP_MASK  (1ULL<<START_STOP_PIN)
 
 /*****************************************************************************/
+/* INTERRUPT SERVICE ROUTINES */
+/*****************************************************************************/
+
+/*****************************************************************************/
 /* HELPER FUNCTIONS */
 /*****************************************************************************/
 
@@ -108,21 +112,28 @@ static void init()
 
 static void echo_task()
 {
-    init();
-
-    // Configure a temporary buffer for the incoming data
     uint8_t *data = (uint8_t *) malloc(BUF_SIZE);
-
-    while (1) {
-        // Read data from the UART
-        int len = uart_read_bytes(UART_NUM_0, data, BUF_SIZE, 20 / portTICK_RATE_MS);
-        // Write data back to the UART
-        uart_write_bytes(UART_NUM_0, (const char *) data, len);
+    
+    while(1)
+    {
+        /* wait for button to be pressed */
+        if (gpio_get_level(GPIO_NUM_33) == 0) /* if button is pressed */
+        {
+            int len = uart_read_bytes(UART_NUM_0, data, BUF_SIZE, 20 / portTICK_RATE_MS);
+            uart_write_bytes(UART_NUM_0, "a", 1);
+            vTaskDelay(50 / portTICK_PERIOD_MS);
+        }
+        else
+        {
+            vTaskDelay(50 / portTICK_PERIOD_MS);
+        }
+        
     }
 }
 
 
 void app_main()
 {
+    init();
     xTaskCreate(echo_task, "uart_echo_task", 2048, NULL, 10, NULL);
 }
