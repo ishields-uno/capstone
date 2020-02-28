@@ -38,23 +38,43 @@
 /* DEFINITIONS */
 /*****************************************************************************/
 
+/* APP_MAIN */
+#define KB              (1024)      /* size of 1KB in bytes */
+#define LOOP_SIZE       ((40) * KB) /* 40KB for loop task */
+#define LOOP_PRIORITY   (10)        /* priority of the loop task */
+
+
 /* UART */
 #define IMU_TX      (GPIO_NUM_1)            /* UART TX Connected to BNO055 */
 #define IMU_RX      (GPIO_NUM_3)            /* UART RX Connected to BNO055 */
 #define RTS         (UART_PIN_NO_CHANGE)    /* Not using RTS */
 #define CTS         (UART_PIN_NO_CHANGE)    /* Not using CTS */
-#define BUF_SIZE    (1024)                  /* UART Data Buffer */
+#define BUF_SIZE    (256)                   /* UART Data Buffer */
 #define BAUD_RATE   (115200)                /* UART Baud Rate */
 
 /* START/START PIN */
-#define START_STOP_PIN   33                         /* use pin 33 */
+#define START_STOP_PIN   (33)                       /* use pin 33 */
 #define START_STOP_MASK  (1ULL<<START_STOP_PIN)     /* create bit mask for setup call */
 
 /* LOOP TASK */
-#define LOOP_ACLLOC     (2048)  /* size of memory allocated to the loop() task */
-#define LOOP_PRIORITY   (10)    /* priority of the loop() task */
+#define LOOP_ACLLOC     (2048)  /* size of memory allocated to the loop_task() task */
+#define LOOP_PRIORITY   (10)    /* priority of the loop_task() task */
 
 /* IMU */
+#define START           (0xAA)  /* start byte for transmission to IMU */
+#define WR_RESP_HEAD    (0xEE)  /* start byte for write response from IMU */
+#define RD_SUCC_HEAD    (0xBB)  /* start byte for read respone from IMU */
+#define RD_FAIL_HEAD    (0xEE)  /* start byte for failed read response from IMU */
+#define READ            (0x01)  /* r/w byte value to read */
+#define WRITE           (0x00)  /* r/w byte value to write */
+
+#define PWR_MODE        (0x3E)  /* power mode register */
+#define NORMAL_MODE     (0x00)
+#define SUSPEND_MODE    (0x02)
+#define OPR_MODE        (0x3D)  /* operation mode register */
+#define CONFIG_MODE     (0x00)
+#define IMU_MODE        (0x08)
+
 
 /*****************************************************************************/
 /* INTERRUPT SERVICE ROUTINES */
@@ -63,6 +83,32 @@
 /*****************************************************************************/
 /* HELPER FUNCTIONS */
 /*****************************************************************************/
+
+/*  
+    NAME:               delay
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          
+    PURPOSE:            Delays the program for x microseconds.
+    CALLING CONVENTION: Pass the number of microseconds you want to delay.  Do not use this for
+                        times greater than 10ms.  Instead, us vTaskDelay().  Don't call with 
+                        negative numbers.
+                        Example for 10 uS: delay(10);
+    CONDITIONS AT EXIT: This function has not return and does not modify any external variables.
+    DATE STARTED:       2/28/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+static void delay(int16_t uS)
+{
+    volatile uint8_t val; /* must be volatile to avoid compiler optimization */
+    while (uS > 0)
+    {
+        for(val = 0; val < 20; val++)
+        {
+        }
+        uS--;
+    }
+}
 
 /*  
     NAME:               init
@@ -81,6 +127,9 @@
 */
 static void init()
 {
+    char temp_read[BUF_SIZE];
+    char temp_write[BUF_SIZE];
+    
     /**************************************/
     /* CONFIGURE UART */
     /**************************************/
@@ -112,15 +161,35 @@ static void init()
     /**************************************/
     /* CONFIGURE BNO055 (IMU) */
     /**************************************/
-    
+
 }
+
+/*  
+    NAME:               read_data
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          loop_task() in main.c
+    PURPOSE:            Reads raw linear acceleration data from the IMU.
+    CALLING CONVENTION: This function takes a pointer to a uint8_t type.  This pointer is filled with 
+                        IMU data.  The maximum size of data collected is 36KB.  If the functiion runs
+                        longer (uninterrupted by a user button press), it will abort.  TRUE means data was
+                        collected successfully and FALSE means data collection failed.
+                        is 36KB.
+    CONDITIONS AT EXIT: This function fills the buffer passed to it.
+    DATE STARTED:       2/27/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+//static bool read_data(uint8_t * data)
+//{
+    
+//}
 
 /*****************************************************************************/
 /* TASKS */
 /*****************************************************************************/
 
 /*  
-    NAME:               loop
+    NAME:               loop_task
     AURTHOR(S):         Isaac Shields
     CALLED BY:          app_main() in main.c
     PURPOSE:            Handles the main loop of the application.  It handles the three
@@ -128,15 +197,16 @@ static void init()
                         IMU data and waiting for button press), PROCESSING (processing IMU
                         data), and SENDING (sending processed data to the phone).
     CALLING CONVENTION: This must be called as a task, so use the convention below.
-                        xTaskCreate(echo_task, "uart_echo_task", LOOP_ACLLOC, NULL, 10, NULL);
+                        xTaskCreate(loop_task, "loop", LOOP_SIZE, NULL, LOOP_PRIORITY, NULL);
     CONDITIONS AT EXIT: This task will not exit.
     DATE STARTED:       2/26/2020
     UPDATE HISTORY:     See Git logs.
     NOTES:              
 */
-static void loop()
+static void loop_task()
 {
-    uint8_t *data = (uint8_t *) malloc(BUF_SIZE);   /* buffer for IMU data */
+    uint8_t temp_read[BUF_SIZE]; // remove this when done testing
+    char temp_write[BUF_SIZE]; //
     
     while(1)
     {
@@ -146,12 +216,30 @@ static void loop()
         if (gpio_get_level(GPIO_NUM_33) == 0) /* if button is pressed */
         {
             /* debounce the button press */
-            vTaskDelay(50 / portTICK_PERIOD_MS);  
+            vTaskDelay(100 / portTICK_PERIOD_MS);  
 
             /**************************************/
             /* READ IMU DATA */
             /**************************************/
-            
+            /* put into config mode (see pg 94 of BNO055 datasheet for protocol)*/
+            temp_write[0] = START;
+            temp_write[1] = WRITE;
+            temp_write[2] = OPR_MODE;
+            temp_write[3] = 1;
+            temp_write[4] = CONFIG_MODE;
+            uart_write_bytes(UART_NUM_0, temp_write, 5);
+            uart_read_bytes(UART_NUM_0, temp_read, 2, 10 / portTICK_PERIOD_MS);
+            delay(500); // test delay
+            uart_write_bytes(UART_NUM_0, temp_write, 5); // test delay
+            /* load calibration profile */
+            /* put into suspend mode */
+            temp_write[0] = START;
+            temp_write[1] = WRITE;
+            temp_write[2] = PWR_MODE;
+            temp_write[3] = 1;
+            temp_write[4] = SUSPEND_MODE;
+            uart_write_bytes(UART_NUM_0, temp_write, 5);
+            uart_read_bytes(UART_NUM_0, temp_read, 2, 10 / portTICK_PERIOD_MS);
         }
         else    /* if button is not pressed */
         {
@@ -176,5 +264,5 @@ static void loop()
 void app_main()
 {
     init();
-    xTaskCreate(echo_task, "uart_echo_task", 2048, NULL, 10, NULL);
+    xTaskCreate(loop_task, "loop", LOOP_SIZE, NULL, LOOP_PRIORITY, NULL);
 }
