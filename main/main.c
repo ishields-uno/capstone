@@ -33,6 +33,8 @@
 #include "freertos/task.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 /*****************************************************************************/
 /* DEFINITIONS */
@@ -62,7 +64,7 @@
 
 
 /* IMU CONFIG TASK */
-
+#define NVS_LABEL_COUNT (14)    /* number of NVS labels */
 
 /* IMU */
 #define START           (0xAA)                      /* start byte for transmission to IMU */
@@ -107,7 +109,21 @@
 #define LIA_DATA_Z_LSB      (0X2C)
 #define LIA_DATA_Z_MSB      (0X2D)
 
+/*****************************************************************************/
+/* CONSTANTS */
+/*****************************************************************************/
 
+/* IMU CONFIG TASK */
+static const char * const 
+nvs_labels[NVS_LABEL_COUNT] =   {   
+                                    "ACC_OFFSET_X_L", "ACC_OFFSET_X_M",
+                                    "ACC_OFFSET_Y_L", "ACC_OFFSET_Y_M",
+                                    "ACC_OFFSET_Z_L", "ACC_OFFSET_Z_M",
+                                    "GYR_OFFSET_X_L", "GYR_OFFSET_X_M",
+                                    "GYR_OFFSET_Y_L", "GYR_OFFSET_Y_M",
+                                    "GYR_OFFSET_Z_L", "GYR_OFFSET_Z_M",
+                                    "ACC_RADIUS_L", "ACC_RADIUS_M"
+                                };
 /*****************************************************************************/
 /* INTERRUPT SERVICE ROUTINES */
 /*****************************************************************************/
@@ -143,28 +159,19 @@ static void delay(int16_t uS)
 }
 
 /*  
-    NAME:               init
+    NAME:               uart_init
     AURTHOR(S):         Isaac Shields
     CALLED BY:          app_main() in main.c
-    PURPOSE:            Initializes the following firmware modules needed for the application:
-                        1. UART for communication with BNO055.
-                        2. START/START button pullup resistor and iterrupt setting.
-    CALLING CONVENTION: init();
+    PURPOSE:            Initializes UART communication with BNO055.
+    CALLING CONVENTION: uart_init();
     CONDITIONS AT EXIT: This function modifies the state of UART pins 1 and 3.  It also configures
-                        the UART0 peripheral.  Additonally, it modifies the function of pin 33 to be
-                        a general purpose GPIO pin.
+                        the UART0 peripheral.
     DATE STARTED:       2/24/2020
     UPDATE HISTORY:     See Git logs.
     NOTES:              
 */
-static void init()
-{
-    char temp_read[BUF_SIZE];
-    char temp_write[BUF_SIZE];
-    
-    /**************************************/
-    /* CONFIGURE UART */
-    /**************************************/
+static void uart_init()
+{   
     /* Configure UART for 115200 bps, 8N1, no parity. */
     uart_config_t uart_config = 
     {
@@ -177,10 +184,21 @@ static void init()
     uart_param_config(UART_NUM_0, &uart_config);
     uart_set_pin(UART_NUM_0, IMU_TX, IMU_RX, RTS, CTS);
     uart_driver_install(UART_NUM_0, BUF_SIZE * 2, 0, 0, NULL, 0);
-    
-    /**************************************/
-    /* CONFIGURE START/STOP BUTTON */
-    /**************************************/
+}
+
+/*  
+    NAME:               start_stop_init
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          app_main() in main.c
+    PURPOSE:            Initializes the START/STOP button.
+    CALLING CONVENTION: start_stop_init();
+    CONDITIONS AT EXIT: This function modifies the state of GPIO pin 33.
+    DATE STARTED:       2/24/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+static void start_stop_init()
+{   
     /* Configure button for pullup and input. */
     gpio_config_t start_stop;
     start_stop.intr_type = GPIO_PIN_INTR_DISABLE;
@@ -189,11 +207,6 @@ static void init()
     start_stop.pull_down_en = GPIO_PULLDOWN_DISABLE;
     start_stop.pull_up_en = GPIO_PULLUP_ENABLE;
     gpio_config(&start_stop);
-    
-    /**************************************/
-    /* CONFIGURE BNO055 (IMU) */
-    /**************************************/
-
 }
 
 /*  
@@ -235,57 +248,7 @@ static void init()
     UPDATE HISTORY:     See Git logs.
     NOTES:              
 */
-static void loop_task()
-{
-    uint8_t temp_read[BUF_SIZE]; // remove this when done testing
-    char temp_write[BUF_SIZE];
-    
-    while(1)
-    {
-        /**************************************/
-        /* WAIT FOR BUTTON PRESS */
-        /**************************************/
-        if (gpio_get_level(GPIO_NUM_33) == 0) /* if button is pressed */
-        {
-            /* debounce the button press */
-            vTaskDelay(1000 / portTICK_PERIOD_MS);  
 
-            /**************************************/
-            /* READ IMU DATA */
-            /**************************************/
-            /* put into config mode (see pg 94 of BNO055 datasheet for protocol)*/
-            temp_write[0] = START;
-            temp_write[1] = WRITE;
-            temp_write[2] = OPR_MODE;
-            temp_write[3] = 1;
-            temp_write[4] = CONFIG_MODE;
-            do
-            {
-                uart_write_bytes(UART_NUM_0, temp_write, 5);
-                uart_read_bytes(UART_NUM_0, temp_read, 2, 2 / portTICK_PERIOD_MS);
-                delay(2000);
-            } while(temp_read[1] != WRITE_SUCCESS);
-            /* load calibration profile */
-            /* put into suspend mode */
-            temp_write[0] = START;
-            temp_write[1] = WRITE;
-            temp_write[2] = PWR_MODE;
-            temp_write[3] = 1;
-            temp_write[4] = SUSPEND_MODE;
-            do
-            {
-                uart_write_bytes(UART_NUM_0, temp_write, 5);
-                uart_read_bytes(UART_NUM_0, temp_read, 2, 2 / portTICK_PERIOD_MS);
-                delay(2000);
-            } while(temp_read[1] != WRITE_SUCCESS);
-        }
-        else    /* if button is not pressed */
-        {
-            /* delay to feed the watchdog */
-            vTaskDelay(50 / portTICK_PERIOD_MS);
-        }
-    }
-}
 
 /*  
     NAME:               imu_config_task
@@ -299,11 +262,59 @@ static void loop_task()
     CONDITIONS AT EXIT: This function does not exit.
     DATE STARTED:       2/28/2020
     UPDATE HISTORY:     See Git logs.
-    NOTES:              
+    NOTES:              NVS code used from nvs.value.example.main.c from Espessif.
 */
 static void imu_config_task()
 {
-
+    uint8_t temp;   // remove when done testing
+    
+    while (1)
+    {
+    if (gpio_get_level(GPIO_NUM_33) == 0) /* if button is pressed */
+    {
+        vTaskDelay(5000 / portTICK_PERIOD_MS); // debounce
+        
+        /**************************************/
+        /* INITIALIZE NVS */
+        /**************************************/
+        esp_err_t err = nvs_flash_init();
+        if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) 
+        {
+            /* NVS partition was truncated and needs to be erased */
+            ESP_ERROR_CHECK(nvs_flash_erase());
+            err = nvs_flash_init();
+        }
+        ESP_ERROR_CHECK( err );
+        
+        /**************************************/
+        /* OPEN NVS HANDLES */
+        /**************************************/
+        nvs_handle_t handles[NVS_LABEL_COUNT];   /* create nvs handle for each piece of calibration data */
+        for (int i = 0; i < NVS_LABEL_COUNT; i++)
+        {
+            err = nvs_open(nvs_labels[i], NVS_READWRITE, &handles[i]);/* open nvs */ // add error handling
+            if (err != ESP_OK)
+                printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+            err = nvs_set_u8(handles[i], nvs_labels[i], (uint8_t) i); /* write nvs */   // do error checking
+            if (err != ESP_OK)
+                printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+            err = nvs_commit(handles[i]);   // do error checking
+            if (err != ESP_OK)
+                printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+            err = nvs_get_u8(handles[i], nvs_labels[i], &temp);
+            if (err != ESP_OK)
+                printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+            uart_write_bytes(UART_NUM_0, (char *) &temp, 1);
+                
+        }
+    }
+    else    /* if button is not pressed */
+    {
+        /* delay to feed the watchdog */
+        vTaskDelay(50 / portTICK_PERIOD_MS);
+    }
+    }
+    
 }
 
 /*  
@@ -320,6 +331,8 @@ static void imu_config_task()
 */
 void app_main()
 {
-    init();
-    xTaskCreate(loop_task, "loop", LOOP_SIZE, NULL, LOOP_PRIORITY, NULL);
+    uart_init();
+    start_stop_init();
+    //xTaskCreate(loop_task, "loop", LOOP_SIZE, NULL, LOOP_PRIORITY, NULL);
+    xTaskCreate(imu_config_task, "imu_config", IMU_CONFIG_SIZE, NULL, IMU_CONFIG_PRIORITY, NULL);
 }
