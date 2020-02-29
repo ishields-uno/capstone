@@ -39,41 +39,73 @@
 /*****************************************************************************/
 
 /* APP_MAIN */
-#define KB              (1024)      /* size of 1KB in bytes */
-#define LOOP_SIZE       ((40) * KB) /* 40KB for loop task */
-#define LOOP_PRIORITY   (10)        /* priority of the loop task */
+#define KB                  (1024)                      /* size of 1KB in bytes */
+#define LOOP_SIZE           ((40) * KB)                 /* 40KB for loop task */
+#define LOOP_PRIORITY       (10)                        /* priority of the loop task */
+#define IMU_CONFIG_SIZE     (2048)                      /* size of memory allocated to the loop_task() task */
+#define IMU_CONFIG_PRIORITY (10)                        /* priority of the loop_task() task */
 
 
 /* UART */
-#define IMU_TX      (GPIO_NUM_1)            /* UART TX Connected to BNO055 */
-#define IMU_RX      (GPIO_NUM_3)            /* UART RX Connected to BNO055 */
-#define RTS         (UART_PIN_NO_CHANGE)    /* Not using RTS */
-#define CTS         (UART_PIN_NO_CHANGE)    /* Not using CTS */
-#define BUF_SIZE    (256)                   /* UART Data Buffer */
-#define BAUD_RATE   (115200)                /* UART Baud Rate */
+#define IMU_TX      (GPIO_NUM_1)                    /* UART TX Connected to BNO055 */
+#define IMU_RX      (GPIO_NUM_3)                    /* UART RX Connected to BNO055 */
+#define RTS         (UART_PIN_NO_CHANGE)            /* Not using RTS */
+#define CTS         (UART_PIN_NO_CHANGE)            /* Not using CTS */
+#define BUF_SIZE    (256)                           /* UART Data Buffer */
+#define BAUD_RATE   (115200)                        /* UART Baud Rate */
 
 /* START/START PIN */
 #define START_STOP_PIN   (33)                       /* use pin 33 */
 #define START_STOP_MASK  (1ULL<<START_STOP_PIN)     /* create bit mask for setup call */
 
 /* LOOP TASK */
-#define LOOP_ACLLOC     (2048)  /* size of memory allocated to the loop_task() task */
-#define LOOP_PRIORITY   (10)    /* priority of the loop_task() task */
+
+
+/* IMU CONFIG TASK */
+
 
 /* IMU */
-#define START           (0xAA)  /* start byte for transmission to IMU */
-#define WR_RESP_HEAD    (0xEE)  /* start byte for write response from IMU */
-#define RD_SUCC_HEAD    (0xBB)  /* start byte for read respone from IMU */
-#define RD_FAIL_HEAD    (0xEE)  /* start byte for failed read response from IMU */
-#define READ            (0x01)  /* r/w byte value to read */
-#define WRITE           (0x00)  /* r/w byte value to write */
+#define START           (0xAA)                      /* start byte for transmission to IMU */
+#define WR_RESP_HEAD    (0xEE)                      /* start byte for write response from IMU */
+#define RD_SUCC_HEAD    (0xBB)                      /* start byte for read respone from IMU */
+#define RD_FAIL_HEAD    (0xEE)                      /* start byte for failed read response from IMU */
+#define READ            (0x01)                      /* r/w byte value to read */
+#define WRITE           (0x00)                      /* r/w byte value to write */
+#define WRITE_SUCCESS   (0x01)  
 
-#define PWR_MODE        (0x3E)  /* power mode register */
-#define NORMAL_MODE     (0x00)
-#define SUSPEND_MODE    (0x02)
-#define OPR_MODE        (0x3D)  /* operation mode register */
-#define CONFIG_MODE     (0x00)
-#define IMU_MODE        (0x08)
+#define PWR_MODE            (0x3E)                  /* power mode register */
+#define NORMAL_MODE         (0x00)
+#define SUSPEND_MODE        (0x02)
+
+#define OPR_MODE            (0x3D)                  /* operation mode register */
+#define CONFIG_MODE         (0x00)
+#define IMU_MODE            (0x08)
+
+#define CALIB_STAT          (0x35)                  /* calibration status register */
+#define ST_GYR_MASK         ((1 << 5) | (1 << 4))
+#define ST_ACC_MASK         ((1 << 3) | (1 << 2))
+
+#define ACC_OFFSET_X_LSB    (0x55)                  /* calibration offset registers */
+#define ACC_OFFSET_X_MSB    (0x56)
+#define ACC_OFFSET_Y_LSB    (0x57)
+#define ACC_OFFSET_Y_MSB    (0x58)
+#define ACC_OFFSET_Z_LSB    (0x59)
+#define ACC_OFFSET_Z_MSB    (0x5A)
+#define GYR_OFFSET_X_LSB    (0x61)
+#define GYR_OFFSET_X_MSB    (0x62)
+#define GYR_OFFSET_Y_LSB    (0x63)
+#define GYR_OFFSET_Y_MSB    (0x64)
+#define GYR_OFFSET_Z_LSB    (0x65)
+#define GYR_OFFSET_Z_MSB    (0x66)
+#define ACC_RADIUS_LSB      (0x67)
+#define ACC_RADIUS_MSB      (0x68)
+
+#define LIA_DATA_X_LSB      (0X28)                  /* linear acceleration data registers */
+#define LIA_DATA_X_MSB      (0X29)
+#define LIA_DATA_Y_LSB      (0X2A)
+#define LIA_DATA_Y_MSB      (0X2B)
+#define LIA_DATA_Z_LSB      (0X2C)
+#define LIA_DATA_Z_MSB      (0X2D)
 
 
 /*****************************************************************************/
@@ -103,7 +135,7 @@ static void delay(int16_t uS)
     volatile uint8_t val; /* must be volatile to avoid compiler optimization */
     while (uS > 0)
     {
-        for(val = 0; val < 20; val++)
+        for(val = 0; val < 9; val++)
         {
         }
         uS--;
@@ -206,7 +238,7 @@ static void init()
 static void loop_task()
 {
     uint8_t temp_read[BUF_SIZE]; // remove this when done testing
-    char temp_write[BUF_SIZE]; //
+    char temp_write[BUF_SIZE];
     
     while(1)
     {
@@ -216,7 +248,7 @@ static void loop_task()
         if (gpio_get_level(GPIO_NUM_33) == 0) /* if button is pressed */
         {
             /* debounce the button press */
-            vTaskDelay(100 / portTICK_PERIOD_MS);  
+            vTaskDelay(1000 / portTICK_PERIOD_MS);  
 
             /**************************************/
             /* READ IMU DATA */
@@ -227,10 +259,12 @@ static void loop_task()
             temp_write[2] = OPR_MODE;
             temp_write[3] = 1;
             temp_write[4] = CONFIG_MODE;
-            uart_write_bytes(UART_NUM_0, temp_write, 5);
-            uart_read_bytes(UART_NUM_0, temp_read, 2, 10 / portTICK_PERIOD_MS);
-            delay(500); // test delay
-            uart_write_bytes(UART_NUM_0, temp_write, 5); // test delay
+            do
+            {
+                uart_write_bytes(UART_NUM_0, temp_write, 5);
+                uart_read_bytes(UART_NUM_0, temp_read, 2, 2 / portTICK_PERIOD_MS);
+                delay(2000);
+            } while(temp_read[1] != WRITE_SUCCESS);
             /* load calibration profile */
             /* put into suspend mode */
             temp_write[0] = START;
@@ -238,8 +272,12 @@ static void loop_task()
             temp_write[2] = PWR_MODE;
             temp_write[3] = 1;
             temp_write[4] = SUSPEND_MODE;
-            uart_write_bytes(UART_NUM_0, temp_write, 5);
-            uart_read_bytes(UART_NUM_0, temp_read, 2, 10 / portTICK_PERIOD_MS);
+            do
+            {
+                uart_write_bytes(UART_NUM_0, temp_write, 5);
+                uart_read_bytes(UART_NUM_0, temp_read, 2, 2 / portTICK_PERIOD_MS);
+                delay(2000);
+            } while(temp_read[1] != WRITE_SUCCESS);
         }
         else    /* if button is not pressed */
         {
@@ -247,6 +285,25 @@ static void loop_task()
             vTaskDelay(50 / portTICK_PERIOD_MS);
         }
     }
+}
+
+/*  
+    NAME:               imu_config_task
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          app_main() in main.c
+    PURPOSE:            Calibrates the IMU.  IMU callibration is only needed when data seems off.  We save
+                        the calibration in the flash and load it into the IMU after every reset.  This function
+                        generates new values for the calibration.  It is only entered if the user holds the
+                        START/STOP button during power on.
+    CALLING CONVENTION: xTaskCreate(imu_config_task, "imu_config", IMU_CONFIG_SIZE, NULL, IMU_CONFIG_PRIORITY, NULL);
+    CONDITIONS AT EXIT: This function does not exit.
+    DATE STARTED:       2/28/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+static void imu_config_task()
+{
+
 }
 
 /*  
