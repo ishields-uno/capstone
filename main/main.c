@@ -44,8 +44,8 @@
 #define KB                  (1024)                      /* size of 1KB in bytes */
 #define LOOP_SIZE           ((40) * KB)                 /* 40KB for loop task */
 #define LOOP_PRIORITY       (10)                        /* priority of the loop task */
-#define IMU_CONFIG_SIZE     (2048)                      /* size of memory allocated to the loop_task() task */
-#define IMU_CONFIG_PRIORITY (10)                        /* priority of the loop_task() task */
+#define IMU_CALIB_SIZE      (2048)                      /* size of memory allocated to the loop_task() task */
+#define IMU_CALIB_PRIORITY  (10)                        /* priority of the loop_task() task */
 
 
 /* UART */
@@ -63,7 +63,7 @@
 /* LOOP TASK */
 
 
-/* IMU CONFIG TASK */
+/* IMU CALIB TASK */
 #define NVS_LABEL_COUNT (14)    /* number of NVS labels */
 
 /* IMU */
@@ -109,13 +109,19 @@
 #define LIA_DATA_Z_LSB      (0X2C)
 #define LIA_DATA_Z_MSB      (0X2D)
 
+/* LEDs */
+#define BLUE_LED_PIN    (16)
+#define BLUE_LED_MASK   (1ULL<<BLUE_LED_PIN)
+#define RED_LED_PIN     (5)
+#define RED_LED_MASK    (1ULL<<RED_LED_PIN)
 /*****************************************************************************/
 /* CONSTANTS */
 /*****************************************************************************/
 
-/* IMU CONFIG TASK */
+/* IMU CONFIG */
+/* labels used for non-volatile memory storage for accelerometer calibration */
 static const char * const 
-nvs_labels[NVS_LABEL_COUNT] =   {   
+nvs_labels[NVS_LABEL_COUNT] =   {                   
                                     "ACC_OFFSET_X_L", "ACC_OFFSET_X_M",
                                     "ACC_OFFSET_Y_L", "ACC_OFFSET_Y_M",
                                     "ACC_OFFSET_Z_L", "ACC_OFFSET_Z_M",
@@ -124,6 +130,7 @@ nvs_labels[NVS_LABEL_COUNT] =   {
                                     "GYR_OFFSET_Z_L", "GYR_OFFSET_Z_M",
                                     "ACC_RADIUS_L", "ACC_RADIUS_M"
                                 };
+
 /*****************************************************************************/
 /* INTERRUPT SERVICE ROUTINES */
 /*****************************************************************************/
@@ -187,6 +194,84 @@ static void uart_init()
 }
 
 /*  
+    NAME:               imu_write
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          // a lot of stuff
+    PURPOSE:            Writes data to an IMU register.  This function blocks until data is 
+                        written successfully.  This function allows 10mS for the read operation
+                        to complete.  Maximum write size is BUF_SIZE.
+    CALLING CONVENTION: reg is the register address you are writing too.  cmd * is a pointer to the 
+                        data you are writing.  len is the number of bytes you are writting.
+                        // TEST IF UART AUTO INCREMENTS.
+                        Example:    temp = IMU_MODE;
+                                    imu_write(OPR_MODE, &temp, sizeof(temp));
+    CONDITIONS AT EXIT: This function has no return value and does not modify any external variables.
+    DATE STARTED:       3/2/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+static void imu_write(char reg, char * cmd, int len)
+{
+    char temp_write[BUF_SIZE];
+    uint8_t temp_read[2];
+    
+    temp_write[0] = START;
+    temp_write[1] = WRITE;
+    temp_write[2] = reg;
+    temp_write[3] = len;
+    for (int i = 0; i < len; i++)
+    {
+        temp_write[4 + i] = *(cmd + i);
+    }
+    
+    do
+    {
+        uart_write_bytes(UART_NUM_0, temp_write, len + 4);
+        uart_read_bytes(UART_NUM_0, temp_read, 2, 10 / portTICK_PERIOD_MS);
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    } while(temp_read[1] != WRITE_SUCCESS);
+}
+
+/*  
+    NAME:               imu_write
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          // a lot of stuff
+    PURPOSE:            Reads data from an IMU register.  This function blocks until data is 
+                        read successfully.  This function allows 10mS for the read operation
+                        to complete.
+    CALLING CONVENTION: reg is the register address you are reading from.  data * is a pointer to 
+                        a data buffer to place the data.  len is the number of bytes you are reading.
+                        // TEST IF UART AUTO INCREMENTS.
+                        Example:    char temp[BUF];
+                                    imu_read(OPR_MODE, temp, sizeof(temp));
+    CONDITIONS AT EXIT: This function will modify the buffer passed to it.
+    DATE STARTED:       3/2/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+static void imu_read(char reg, uint8_t * data, int len)
+{
+    char temp_write[4];
+    
+    temp_write[0] = START;
+    temp_write[1] = READ;
+    temp_write[2] = reg;
+    temp_write[3] = len;
+    do
+    {
+        uart_write_bytes(UART_NUM_0, temp_write, 4);
+        uart_read_bytes(UART_NUM_0, data, len + 2, 10 / portTICK_PERIOD_MS);
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    } while(temp_read[0] != RD_SUCC_HEAD);
+    
+    /* remove header */
+    for (int i = 0; i < len; i++)
+    {
+        *(data) = *(data + i + 2);
+    }
+}
+
+/*  
     NAME:               start_stop_init
     AURTHOR(S):         Isaac Shields
     CALLED BY:          app_main() in main.c
@@ -210,28 +295,218 @@ static void start_stop_init()
 }
 
 /*  
-    NAME:               read_data
+    NAME:               nvs_init
     AURTHOR(S):         Isaac Shields
-    CALLED BY:          loop_task() in main.c
-    PURPOSE:            Reads raw linear acceleration data from the IMU.
-    CALLING CONVENTION: This function takes a pointer to a uint8_t type.  This pointer is filled with 
-                        IMU data.  The maximum size of data collected is 36KB.  If the functiion runs
-                        longer (uninterrupted by a user button press), it will abort.  TRUE means data was
-                        collected successfully and FALSE means data collection failed.
-                        is 36KB.
-    CONDITIONS AT EXIT: This function fills the buffer passed to it.
-    DATE STARTED:       2/27/2020
+    CALLED BY:          app_main() in main.c
+    PURPOSE:            Initializes non-volotile storage used for bluetooth and calibration data.
+    CALLING CONVENTION: nvs_init();
+    CONDITIONS AT EXIT: 
+    DATE STARTED:       3/1/2020
     UPDATE HISTORY:     See Git logs.
     NOTES:              
 */
-//static bool read_data(uint8_t * data)
-//{
+static void nvs_init()
+{   
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) 
+    {
+        /* NVS partition was truncated and needs to be erased */
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK( err );
+}
+
+/*  
+    NAME:               led_init
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          app_main() in main.c
+    PURPOSE:            Initializes the LEDs.
+    CALLING CONVENTION: led_init();
+    CONDITIONS AT EXIT: This function modifies the state of GPIO pins 5 and 16.
+    DATE STARTED:       3/1/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+static void led_init()
+{   
+    /* Configure red LED */
+    gpio_config_t red_led;
+    red_led.intr_type = GPIO_PIN_INTR_DISABLE;
+    red_led.mode = GPIO_MODE_OUTPUT;
+    red_led.pin_bit_mask = RED_LED_MASK;
+    red_led.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    red_led.pull_up_en = GPIO_PULLUP_DISABLE;
+    gpio_config(&red_led);
+    gpio_set_level(RED_LED_PIN, 1); /* keep led on when booted */
     
-//}
+    /* Configure blue LED */
+    gpio_config_t blue_led;
+    blue_led.intr_type = GPIO_PIN_INTR_DISABLE;
+    blue_led.mode = GPIO_MODE_OUTPUT;
+    blue_led.pin_bit_mask = BLUE_LED_MASK;
+    blue_led.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    blue_led.pull_up_en = GPIO_PULLUP_DISABLE;
+    gpio_config(&blue_led);
+    gpio_set_level(BLUE_LED_PIN, 0);
+}
+
+/*  
+    NAME:               imu_init
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          app_main() in main.c
+    PURPOSE:            Initializes the IMU for normal operation.  The IMU is loaded with
+                        previous calibration values from the flash memory.  It is set for
+                        IMU sensor fusion mode and put into suspend mode to save power.
+    CALLING CONVENTION: imu_init();
+    CONDITIONS AT EXIT: This function modifies the state of GPIO pin 33.
+    DATE STARTED:       3/2/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+static void imu_init()
+{
+    char temp; /* temp char for calibration and uart data */
+    
+    /**************************************/
+    /* PUT INTO CONFIG MODE */
+    /**************************************/
+    temp = CONFIG_MODE;
+    imu_write(OPR_MODE, &temp, sizeof(temp));
+    
+    /**************************************/
+    /* DISABLE AUTOMATIC LOW POWER MODE*/
+    /**************************************/
+    // I'm pretty sure this is auto controlled in fusion mode.  This needs
+    // to be tested.
+    
+    /**************************************/
+    /* CONFIGURE ACCELEROMETER G RANGE*/
+    /**************************************/
+    // This defaults to +/-4G.  We'll try this setting for now but it may needed
+    // to be changed later.  There is conflicting info on the datasheet about
+    // whether or not I can change this in the fusion mode.  Intuitively,
+    // I think it is probably available.
+    // Accelerometer offsets are based on the G-Range.  The default is four.  If we change the default
+    // we need to make sure to change this.
+    
+    /**************************************/
+    /* LOAD CALIBRATION PROFILE */
+    /**************************************/
+    /* create nvs handle for each piece of calibration data */
+    nvs_handle_t handles[NVS_LABEL_COUNT];
+    for (int i = 0; i < NVS_LABEL_COUNT; i++)
+    {
+        /* open nvs */ // add error handling
+        err = nvs_open(nvs_labels[i], NVS_READONLY, &handles[i]); // handle this error
+        /* read nvs value */
+        err = nvs_get_u8(handles[i], nvs_labels[i], &temp);       // handle this error
+        /* close nvs handle */
+        err = nvs_close(handles[i]);       // handle this error
+        /* load calibration data to IMU */
+        imu_write(ACC_OFFSET_X_LSB + i, &temp, sizeof(temp));
+    }
+
+    /**************************************/
+    /* PUT INTO SUSPEND MODE */
+    /**************************************/
+    temp = SUSPEND_MODE
+    imu_write(PWR_MODE, &temp, sizeof(temp));
+}
+
 
 /*****************************************************************************/
 /* TASKS */
 /*****************************************************************************/
+
+/*  
+    NAME:               imu_calib_task
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          app_main() in main.c
+    PURPOSE:            Calibrates the IMU.  IMU callibration is only needed when data seems off.  We save
+                        the calibration in the flash and load it into the IMU after every reset.  This function
+                        generates new values for the calibration.  It is only entered if the user holds the
+                        START/STOP button during power on.
+    CALLING CONVENTION: xTaskCreate(imu_calib_task, "imu_calib", IMU_CONFIG_SIZE, NULL, IMU_CONFIG_PRIORITY, NULL);
+    CONDITIONS AT EXIT: This function does not exit.
+    DATE STARTED:       2/28/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              NVS code used from nvs.value.example.main.c from Espessif.
+*/
+static void imu_calib_task()
+{
+    bool accel_ready = false;               /* is accelerometer configured */
+    bool gyro_ready =  false;               /* is gyro configured */
+    uint8_t read_buf[BUF_SIZE];             /* buffer for uart read */
+    uint8_t accel_lite = 0x01;              /* is accel light on or off */
+    uint8_t gyro_lite = 0x00;               /* is gyro light on or off */
+    char temp;                              /* temp char for uart write registers */
+    nvs_handle_t handles[NVS_LABEL_COUNT];  /* create nvs handle for each piece of calibration data */
+    
+    // Accelerometer offsets are based on the G-Range.  The default is four.  If we change the default
+    // we need to make sure to change this.
+    
+    /**************************************/
+    /* PUT INTO IMU MODE */
+    /**************************************/
+    temp = IMU_MODE;
+    imu_write(OPR_MODE, &temp, sizeof(temp));
+    
+    /**************************************/
+    /* WAIT FOR IMU TO BE CALIBRATED */
+    /**************************************/
+    temp_write[0] = START;
+    temp_write[1] = READ;
+    temp_write[2] = CALIB_STAT;
+    temp_write[3] = 1;
+    /* wait for imu to be calibrated */
+    while((accel_ready == false) && (gyro_ready == false))
+    {
+        /* handle LED display */
+        if(gyro_ready)
+            gyro_lite = 1;
+        else
+            gyro_lite ^= 1;
+        if(gyro_ready)
+            gyro_lite = 1;
+        else
+            gyro_lite ^= 1;
+        gpio_set_level(BLUE_LED_PIN, gyro_lite);
+        gpio_set_level(RED_LED_PIN, accel_lite);
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+        /* read calib_stat values */
+        imu_read(CALIB_STAT, read_buf, 1);
+        /* check values */
+        if (read_buf[0] && ST_ACC_MASK)
+            accel_ready = true;
+        if (read_buf[0] && ST_GYR_MASK)
+            gyro_ready = true;
+    }
+    
+    /**************************************/
+    /* SWITCH TO CONFIG MODE */
+    /**************************************/
+    /* clear leds until load is complete */
+    gpio_set_level(BLUE_LED_PIN, 0);
+    gpio_set_level(RED_LED_PIN, 0);
+    /* put into config mode in order to read offset */
+    temp = CONFIG_MODE;
+    imu_write(OPR_MODE, &temp, sizeof(temp));
+    
+    /**************************************/
+    /* LOAD OFFSET VALUES INTO NVS */
+    /**************************************/
+    /* read offset values */
+    imu_read(OPR_MODE, read_buf, NVS_LABEL_COUNT);
+    /* load offsets into nvs */
+    for (int i = 0; i < NVS_LABEL_COUNT; i++)
+    {
+        err = nvs_open(nvs_labels[i], NVS_READWRITE, &handles[i]);  /* open nvs */ // add error handling
+        err = nvs_set_u8(handles[i], nvs_labels[i], read_buf[i]);   /* write nvs */   // do error checking
+        err = nvs_commit(handles[i]);                               /* commit changes */ // do error checking
+        err = nvs_close(handles[i]);                                /* close the handle */ // do error checking
+    }
+}
 
 /*  
     NAME:               loop_task
@@ -248,73 +523,9 @@ static void start_stop_init()
     UPDATE HISTORY:     See Git logs.
     NOTES:              
 */
-
-
-/*  
-    NAME:               imu_config_task
-    AURTHOR(S):         Isaac Shields
-    CALLED BY:          app_main() in main.c
-    PURPOSE:            Calibrates the IMU.  IMU callibration is only needed when data seems off.  We save
-                        the calibration in the flash and load it into the IMU after every reset.  This function
-                        generates new values for the calibration.  It is only entered if the user holds the
-                        START/STOP button during power on.
-    CALLING CONVENTION: xTaskCreate(imu_config_task, "imu_config", IMU_CONFIG_SIZE, NULL, IMU_CONFIG_PRIORITY, NULL);
-    CONDITIONS AT EXIT: This function does not exit.
-    DATE STARTED:       2/28/2020
-    UPDATE HISTORY:     See Git logs.
-    NOTES:              NVS code used from nvs.value.example.main.c from Espessif.
-*/
-static void imu_config_task()
+static void loop_task()
 {
-    uint8_t temp;   // remove when done testing
-    
-    while (1)
-    {
-    if (gpio_get_level(GPIO_NUM_33) == 0) /* if button is pressed */
-    {
-        vTaskDelay(5000 / portTICK_PERIOD_MS); // debounce
-        
-        /**************************************/
-        /* INITIALIZE NVS */
-        /**************************************/
-        esp_err_t err = nvs_flash_init();
-        if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) 
-        {
-            /* NVS partition was truncated and needs to be erased */
-            ESP_ERROR_CHECK(nvs_flash_erase());
-            err = nvs_flash_init();
-        }
-        ESP_ERROR_CHECK( err );
-        
-        /**************************************/
-        /* OPEN NVS HANDLES */
-        /**************************************/
-        nvs_handle_t handles[NVS_LABEL_COUNT];   /* create nvs handle for each piece of calibration data */
-        for (int i = 0; i < NVS_LABEL_COUNT; i++)
-        {
-            err = nvs_open(nvs_labels[i], NVS_READWRITE, &handles[i]);/* open nvs */ // add error handling
-            if (err != ESP_OK)
-                printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
-            err = nvs_set_u8(handles[i], nvs_labels[i], (uint8_t) i); /* write nvs */   // do error checking
-            if (err != ESP_OK)
-                printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
-            err = nvs_commit(handles[i]);   // do error checking
-            if (err != ESP_OK)
-                printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
-            err = nvs_get_u8(handles[i], nvs_labels[i], &temp);
-            if (err != ESP_OK)
-                printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
-            uart_write_bytes(UART_NUM_0, (char *) &temp, 1);
-                
-        }
-    }
-    else    /* if button is not pressed */
-    {
-        /* delay to feed the watchdog */
-        vTaskDelay(50 / portTICK_PERIOD_MS);
-    }
-    }
-    
+
 }
 
 /*  
@@ -332,7 +543,16 @@ static void imu_config_task()
 void app_main()
 {
     uart_init();
+    led_init();
     start_stop_init();
-    //xTaskCreate(loop_task, "loop", LOOP_SIZE, NULL, LOOP_PRIORITY, NULL);
-    xTaskCreate(imu_config_task, "imu_config", IMU_CONFIG_SIZE, NULL, IMU_CONFIG_PRIORITY, NULL);
+    nvs_init();
+    if (gpio_get_level(GPIO_NUM_33) == 0) /* if button is pressed */
+    {
+        xTaskCreate(imu_calib_task, "imu_calib", IMU_CALIB_SIZE, NULL, IMU_CALIB_PRIORITY, NULL);
+    }
+    else    /* button is not pressed */
+    {
+        xTaskCreate(loop_task, "loop", LOOP_SIZE, NULL, LOOP_PRIORITY, NULL);
+    }
+    
 }
