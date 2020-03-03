@@ -31,7 +31,6 @@
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/uart.h"
 #include "driver/gpio.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -47,14 +46,6 @@
 #define IMU_CALIB_SIZE      (2048)                      /* size of memory allocated to the loop_task() task */
 #define IMU_CALIB_PRIORITY  (10)                        /* priority of the loop_task() task */
 
-
-/* UART */
-#define IMU_TX      (GPIO_NUM_1)                    /* UART TX Connected to BNO055 */
-#define IMU_RX      (GPIO_NUM_3)                    /* UART RX Connected to BNO055 */
-#define RTS         (UART_PIN_NO_CHANGE)            /* Not using RTS */
-#define CTS         (UART_PIN_NO_CHANGE)            /* Not using CTS */
-#define BUF_SIZE    (256)                           /* UART Data Buffer */
-#define BAUD_RATE   (115200)                        /* UART Baud Rate */
 
 /* START/START PIN */
 #define START_STOP_PIN   (33)                       /* use pin 33 */
@@ -162,112 +153,6 @@ static void delay(int16_t uS)
         {
         }
         uS--;
-    }
-}
-
-/*  
-    NAME:               uart_init
-    AURTHOR(S):         Isaac Shields
-    CALLED BY:          app_main() in main.c
-    PURPOSE:            Initializes UART communication with BNO055.
-    CALLING CONVENTION: uart_init();
-    CONDITIONS AT EXIT: This function modifies the state of UART pins 1 and 3.  It also configures
-                        the UART0 peripheral.
-    DATE STARTED:       2/24/2020
-    UPDATE HISTORY:     See Git logs.
-    NOTES:              
-*/
-static void uart_init()
-{   
-    /* Configure UART for 115200 bps, 8N1, no parity. */
-    uart_config_t uart_config = 
-    {
-        .baud_rate = BAUD_RATE,
-        .data_bits = UART_DATA_8_BITS,
-        .parity    = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
-    };
-    uart_param_config(UART_NUM_0, &uart_config);
-    uart_set_pin(UART_NUM_0, IMU_TX, IMU_RX, RTS, CTS);
-    uart_driver_install(UART_NUM_0, BUF_SIZE * 2, 0, 0, NULL, 0);
-}
-
-/*  
-    NAME:               imu_write
-    AURTHOR(S):         Isaac Shields
-    CALLED BY:          // a lot of stuff
-    PURPOSE:            Writes data to an IMU register.  This function blocks until data is 
-                        written successfully.  This function allows 10mS for the read operation
-                        to complete.  Maximum write size is BUF_SIZE.
-    CALLING CONVENTION: reg is the register address you are writing too.  cmd * is a pointer to the 
-                        data you are writing.  len is the number of bytes you are writting.
-                        // TEST IF UART AUTO INCREMENTS.
-                        Example:    temp = IMU_MODE;
-                                    imu_write(OPR_MODE, &temp, sizeof(temp));
-    CONDITIONS AT EXIT: This function has no return value and does not modify any external variables.
-    DATE STARTED:       3/2/2020
-    UPDATE HISTORY:     See Git logs.
-    NOTES:              
-*/
-static void imu_write(char reg, char * cmd, int len)
-{
-    char temp_write[BUF_SIZE];
-    uint8_t temp_read[2];
-    
-    temp_write[0] = START;
-    temp_write[1] = WRITE;
-    temp_write[2] = reg;
-    temp_write[3] = len;
-    for (int i = 0; i < len; i++)
-    {
-        temp_write[4 + i] = *(cmd + i);
-    }
-    
-    do
-    {
-        uart_write_bytes(UART_NUM_0, temp_write, len + 4);
-        uart_read_bytes(UART_NUM_0, temp_read, 2, 10 / portTICK_PERIOD_MS);
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-    } while(temp_read[1] != WRITE_SUCCESS);
-}
-
-/*  
-    NAME:               imu_write
-    AURTHOR(S):         Isaac Shields
-    CALLED BY:          // a lot of stuff
-    PURPOSE:            Reads data from an IMU register.  This function blocks until data is 
-                        read successfully.  This function allows 10mS for the read operation
-                        to complete.
-    CALLING CONVENTION: reg is the register address you are reading from.  data * is a pointer to 
-                        a data buffer to place the data.  len is the number of bytes you are reading.
-                        // TEST IF UART AUTO INCREMENTS.
-                        Example:    char temp[BUF];
-                                    imu_read(OPR_MODE, temp, sizeof(temp));
-    CONDITIONS AT EXIT: This function will modify the buffer passed to it.
-    DATE STARTED:       3/2/2020
-    UPDATE HISTORY:     See Git logs.
-    NOTES:              
-*/
-static void imu_read(char reg, uint8_t * data, int len)
-{
-    char temp_write[4];
-    
-    temp_write[0] = START;
-    temp_write[1] = READ;
-    temp_write[2] = reg;
-    temp_write[3] = len;
-    do
-    {
-        uart_write_bytes(UART_NUM_0, temp_write, 4);
-        uart_read_bytes(UART_NUM_0, data, len + 2, 10 / portTICK_PERIOD_MS);
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-    } while(temp_read[0] != RD_SUCC_HEAD);
-    
-    /* remove header */
-    for (int i = 0; i < len; i++)
-    {
-        *(data) = *(data + i + 2);
     }
 }
 
@@ -542,7 +427,6 @@ static void loop_task()
 */
 void app_main()
 {
-    uart_init();
     led_init();
     start_stop_init();
     nvs_init();
