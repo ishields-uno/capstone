@@ -32,6 +32,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "driver/i2c.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 
@@ -58,13 +59,6 @@
 #define NVS_LABEL_COUNT (14)    /* number of NVS labels */
 
 /* IMU */
-#define START           (0xAA)                      /* start byte for transmission to IMU */
-#define WR_RESP_HEAD    (0xEE)                      /* start byte for write response from IMU */
-#define RD_SUCC_HEAD    (0xBB)                      /* start byte for read respone from IMU */
-#define RD_FAIL_HEAD    (0xEE)                      /* start byte for failed read response from IMU */
-#define READ            (0x01)                      /* r/w byte value to read */
-#define WRITE           (0x00)                      /* r/w byte value to write */
-#define WRITE_SUCCESS   (0x01)  
 
 #define PWR_MODE            (0x3E)                  /* power mode register */
 #define NORMAL_MODE         (0x00)
@@ -75,36 +69,30 @@
 #define IMU_MODE            (0x08)
 
 #define CALIB_STAT          (0x35)                  /* calibration status register */
-#define ST_GYR_MASK         ((1 << 5) | (1 << 4))
-#define ST_ACC_MASK         ((1 << 3) | (1 << 2))
+#define ST_SYS1             (1 << 6)
+#define ST_SYS2             (1 << 7)
 
 #define ACC_OFFSET_X_LSB    (0x55)                  /* calibration offset registers */
-#define ACC_OFFSET_X_MSB    (0x56)
-#define ACC_OFFSET_Y_LSB    (0x57)
-#define ACC_OFFSET_Y_MSB    (0x58)
-#define ACC_OFFSET_Z_LSB    (0x59)
-#define ACC_OFFSET_Z_MSB    (0x5A)
-#define GYR_OFFSET_X_LSB    (0x61)
-#define GYR_OFFSET_X_MSB    (0x62)
-#define GYR_OFFSET_Y_LSB    (0x63)
-#define GYR_OFFSET_Y_MSB    (0x64)
-#define GYR_OFFSET_Z_LSB    (0x65)
-#define GYR_OFFSET_Z_MSB    (0x66)
-#define ACC_RADIUS_LSB      (0x67)
-#define ACC_RADIUS_MSB      (0x68)
 
 #define LIA_DATA_X_LSB      (0X28)                  /* linear acceleration data registers */
-#define LIA_DATA_X_MSB      (0X29)
-#define LIA_DATA_Y_LSB      (0X2A)
-#define LIA_DATA_Y_MSB      (0X2B)
-#define LIA_DATA_Z_LSB      (0X2C)
-#define LIA_DATA_Z_MSB      (0X2D)
+#define LIA_REG_CNT         (0x06)
 
 /* LEDs */
 #define BLUE_LED_PIN    (16)
 #define BLUE_LED_MASK   (1ULL<<BLUE_LED_PIN)
 #define RED_LED_PIN     (5)
 #define RED_LED_MASK    (1ULL<<RED_LED_PIN)
+
+/* I2C */
+#define I2C_FREQ                    (5000)                      /* clock speed */
+#define I2C_MASTER_TX_BUF_DISABLE   (0)                          /* I2C master doesn't need buffer */
+#define I2C_MASTER_RX_BUF_DISABLE   (0)                          /* I2C master doesn't need buffer */
+#define IMU_I2C_ADDR                (0x28)
+#define ACK_CHECK_EN                (0x1)                        /* I2C master will check ack from slave*/
+#define ACK_CHECK_DIS               (0x0)                        /* I2C master will not check ack from slave */
+#define ACK_VAL                     (0x0)
+#define NACK_VAL                    (0x1)
+#define BUF_SIZE                    (128)
 /*****************************************************************************/
 /* CONSTANTS */
 /*****************************************************************************/
@@ -131,29 +119,82 @@ nvs_labels[NVS_LABEL_COUNT] =   {
 /*****************************************************************************/
 
 /*  
-    NAME:               delay
+    NAME:               i2c_master_init
     AURTHOR(S):         Isaac Shields
-    CALLED BY:          
-    PURPOSE:            Delays the program for x microseconds.
-    CALLING CONVENTION: Pass the number of microseconds you want to delay.  Do not use this for
-                        times greater than 10ms.  Instead, us vTaskDelay().  Don't call with 
-                        negative numbers.
-                        Example for 10 uS: delay(10);
-    CONDITIONS AT EXIT: This function has not return and does not modify any external variables.
-    DATE STARTED:       2/28/2020
+    CALLED BY:          app_main() in main.c
+    PURPOSE:            Initializes the i2c interface.
+    CALLING CONVENTION: i2c_master_init();
+    CONDITIONS AT EXIT: This function modifies the state of GPIO pins 22 and 21.
+    DATE STARTED:       3/3/2020
     UPDATE HISTORY:     See Git logs.
     NOTES:              
 */
-static void delay(int16_t uS)
+static void i2c_master_init()
 {
-    volatile uint8_t val; /* must be volatile to avoid compiler optimization */
-    while (uS > 0)
-    {
-        for(val = 0; val < 9; val++)
-        {
-        }
-        uS--;
+    i2c_config_t conf;
+    conf.mode = I2C_MODE_MASTER;
+    conf.sda_io_num = GPIO_NUM_21;
+    conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+    conf.scl_io_num = GPIO_NUM_22;
+    conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+    conf.master.clk_speed = I2C_FREQ;
+    i2c_param_config(I2C_NUM_0, &conf);
+    i2c_driver_install(I2C_NUM_0, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
+}
+
+/*  
+    NAME:               imu_write
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          // a lot of stuff
+    PURPOSE:            Writes data to an IMU register.
+    CALLING CONVENTION: reg is the IMU register being written to.  val is the value you are
+                        writing to.
+                        Example: imu_write(PWR_MODE, NORMAL_MODE);
+    CONDITIONS AT EXIT: 
+    DATE STARTED:       3/2/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+static void imu_write(uint8_t reg, uint8_t val)
+{
+    uint8_t data[2];
+    data[0] = reg;
+    data[1] = val;
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (IMU_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write(cmd, data, sizeof(data), ACK_CHECK_EN);
+    i2c_master_stop(cmd);
+    i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_RATE_MS);
+    i2c_cmd_link_delete(cmd);
+}
+
+/*  
+    NAME:               imu_read
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          // a lot of stuff
+    PURPOSE:            Reads data from an IMU register.
+    CALLING CONVENTION: 
+    CONDITIONS AT EXIT: 
+    DATE STARTED:       3/2/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+static void imu_read(char reg, uint8_t * data, size_t len)
+{
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (IMU_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, reg, true);
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (IMU_I2C_ADDR << 1) | I2C_MASTER_READ, true);
+    if (len > 1) {
+        i2c_master_read(cmd, data, len - 1, ACK_VAL);
     }
+    i2c_master_read_byte(cmd, data + len - 1, NACK_VAL);
+    i2c_master_stop(cmd);
+    i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_RATE_MS);
+    i2c_cmd_link_delete(cmd);
 }
 
 /*  
@@ -250,14 +291,12 @@ static void led_init()
     NOTES:              
 */
 static void imu_init()
-{
-    char temp; /* temp char for calibration and uart data */
+{   
     
     /**************************************/
     /* PUT INTO CONFIG MODE */
     /**************************************/
-    temp = CONFIG_MODE;
-    imu_write(OPR_MODE, &temp, sizeof(temp));
+    imu_write(OPR_MODE, CONFIG_MODE);
     
     /**************************************/
     /* DISABLE AUTOMATIC LOW POWER MODE*/
@@ -278,25 +317,27 @@ static void imu_init()
     /**************************************/
     /* LOAD CALIBRATION PROFILE */
     /**************************************/
+    // Documentation says use of accelerometer and gyroscope only should provide accurate
+    // results without calibration.  This will be added later if our results are not accurate
+    // enough.
     /* create nvs handle for each piece of calibration data */
-    nvs_handle_t handles[NVS_LABEL_COUNT];
-    for (int i = 0; i < NVS_LABEL_COUNT; i++)
-    {
+    // nvs_handle_t handles[NVS_LABEL_COUNT]; // uncomment when integrating into main program
+    //for (int i = 0; i < NVS_LABEL_COUNT; i++)
+    //{
         /* open nvs */ // add error handling
-        err = nvs_open(nvs_labels[i], NVS_READONLY, &handles[i]); // handle this error
+        //err = nvs_open(nvs_labels[i], NVS_READONLY, &handles[i]); // handle this error
         /* read nvs value */
-        err = nvs_get_u8(handles[i], nvs_labels[i], &temp);       // handle this error
+        //err = nvs_get_u8(handles[i], nvs_labels[i], &temp);       // handle this error
         /* close nvs handle */
-        err = nvs_close(handles[i]);       // handle this error
+        //err = nvs_close(handles[i]);       // handle this error
         /* load calibration data to IMU */
-        imu_write(ACC_OFFSET_X_LSB + i, &temp, sizeof(temp));
-    }
+        //imu_write(ACC_OFFSET_X_LSB + i, 0x55);
+    //}
 
     /**************************************/
     /* PUT INTO SUSPEND MODE */
     /**************************************/
-    temp = SUSPEND_MODE
-    imu_write(PWR_MODE, &temp, sizeof(temp));
+    imu_write(PWR_MODE, SUSPEND_MODE);
 }
 
 
@@ -320,12 +361,10 @@ static void imu_init()
 */
 static void imu_calib_task()
 {
-    bool accel_ready = false;               /* is accelerometer configured */
-    bool gyro_ready =  false;               /* is gyro configured */
-    uint8_t read_buf[BUF_SIZE];             /* buffer for uart read */
-    uint8_t accel_lite = 0x01;              /* is accel light on or off */
-    uint8_t gyro_lite = 0x00;               /* is gyro light on or off */
-    char temp;                              /* temp char for uart write registers */
+    bool calib_ready = false;                   /* is system calibrated */
+    uint8_t read_buf[BUF_SIZE] = { 0 };         /* buffer for i2c read */
+    uint8_t lite = 0x00;                        /* is gyro light on or off */
+    esp_err_t err;                              /* esp error type */
     nvs_handle_t handles[NVS_LABEL_COUNT];  /* create nvs handle for each piece of calibration data */
     
     // Accelerometer offsets are based on the G-Range.  The default is four.  If we change the default
@@ -334,38 +373,22 @@ static void imu_calib_task()
     /**************************************/
     /* PUT INTO IMU MODE */
     /**************************************/
-    temp = IMU_MODE;
-    imu_write(OPR_MODE, &temp, sizeof(temp));
+    imu_write(OPR_MODE, IMU_MODE);
     
     /**************************************/
     /* WAIT FOR IMU TO BE CALIBRATED */
     /**************************************/
-    temp_write[0] = START;
-    temp_write[1] = READ;
-    temp_write[2] = CALIB_STAT;
-    temp_write[3] = 1;
-    /* wait for imu to be calibrated */
-    while((accel_ready == false) && (gyro_ready == false))
+    while(calib_ready == false)
     {
         /* handle LED display */
-        if(gyro_ready)
-            gyro_lite = 1;
-        else
-            gyro_lite ^= 1;
-        if(gyro_ready)
-            gyro_lite = 1;
-        else
-            gyro_lite ^= 1;
-        gpio_set_level(BLUE_LED_PIN, gyro_lite);
-        gpio_set_level(RED_LED_PIN, accel_lite);
-        vTaskDelay(500 / portTICK_PERIOD_MS);
+        lite ^= 1;
+        gpio_set_level(BLUE_LED_PIN, lite);
+        vTaskDelay(500 / portTICK_PERIOD_MS); /* delay to see led changes */
         /* read calib_stat values */
         imu_read(CALIB_STAT, read_buf, 1);
         /* check values */
-        if (read_buf[0] && ST_ACC_MASK)
-            accel_ready = true;
-        if (read_buf[0] && ST_GYR_MASK)
-            gyro_ready = true;
+        if ( (read_buf[0] & ST_SYS1) && (read_buf[0] & ST_SYS1) )
+            calib_ready = true;
     }
     
     /**************************************/
@@ -373,24 +396,31 @@ static void imu_calib_task()
     /**************************************/
     /* clear leds until load is complete */
     gpio_set_level(BLUE_LED_PIN, 0);
-    gpio_set_level(RED_LED_PIN, 0);
     /* put into config mode in order to read offset */
-    temp = CONFIG_MODE;
-    imu_write(OPR_MODE, &temp, sizeof(temp));
+    imu_write(OPR_MODE, CONFIG_MODE);
     
     /**************************************/
     /* LOAD OFFSET VALUES INTO NVS */
     /**************************************/
     /* read offset values */
-    imu_read(OPR_MODE, read_buf, NVS_LABEL_COUNT);
+    imu_read(ACC_OFFSET_X_LSB, read_buf, NVS_LABEL_COUNT);
     /* load offsets into nvs */
     for (int i = 0; i < NVS_LABEL_COUNT; i++)
     {
         err = nvs_open(nvs_labels[i], NVS_READWRITE, &handles[i]);  /* open nvs */ // add error handling
         err = nvs_set_u8(handles[i], nvs_labels[i], read_buf[i]);   /* write nvs */   // do error checking
         err = nvs_commit(handles[i]);                               /* commit changes */ // do error checking
-        err = nvs_close(handles[i]);                                /* close the handle */ // do error checking
+        nvs_close(handles[i]);                                      /* close the handle */ // do error checking
     }
+    /* show that load is complete */
+    gpio_set_level(BLUE_LED_PIN, 1);
+    
+    while(1)
+    {
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+    }
+    
+    
 }
 
 /*  
@@ -410,7 +440,11 @@ static void imu_calib_task()
 */
 static void loop_task()
 {
-
+    imu_init();
+    while(1)
+    {
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+    }
 }
 
 /*  
@@ -430,6 +464,7 @@ void app_main()
     led_init();
     start_stop_init();
     nvs_init();
+    i2c_master_init();
     if (gpio_get_level(GPIO_NUM_33) == 0) /* if button is pressed */
     {
         xTaskCreate(imu_calib_task, "imu_calib", IMU_CALIB_SIZE, NULL, IMU_CALIB_PRIORITY, NULL);
