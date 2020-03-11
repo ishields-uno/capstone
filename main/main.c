@@ -45,6 +45,8 @@
 #define LOOP_PRIORITY       (10)                        /* priority of the loop task */
 #define IMU_CALIB_SIZE      (2048)                      /* size of memory allocated to the loop_task() task */
 #define IMU_CALIB_PRIORITY  (10)                        /* priority of the loop_task() task */
+#define PRO_CPU_NUM         (0)                         /* process cpu number */
+#define APP_CPU_NUM         (1)                         /* application cpu number */
 
 /* LOOP TASK */
 
@@ -226,11 +228,11 @@ void app_main()
     i2c_master_init();
     if (gpio_get_level(START_STOP_PIN) == 0) /* if button is pressed */
     {
-        xTaskCreate(imu_calib_task, "imu_calib", IMU_CALIB_SIZE, NULL, IMU_CALIB_PRIORITY, NULL);
+        xTaskCreatePinnedToCore(imu_calib_task, "imu_calib", IMU_CALIB_SIZE, NULL, IMU_CALIB_PRIORITY, NULL, APP_CPU_NUM);
     }
     else    /* button is not pressed */
     {
         imu_init();
-        xTaskCreate(loop_task, "loop", LOOP_SIZE, NULL, LOOP_PRIORITY, NULL);
+        xTaskCreatePinnedToCore(loop_task, "loop", LOOP_SIZE, NULL, LOOP_PRIORITY, NULL, APP_CPU_NUM);
     } 
 }
