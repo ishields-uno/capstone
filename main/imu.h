@@ -53,7 +53,7 @@
 /**************************************/
 /* I2C */
 /**************************************/
-#define I2C_FREQ                    (10000)     /* clock speed */
+#define I2C_FREQ                    (8000)     /* clock speed */
 #define I2C_MASTER_TX_BUF_DISABLE   (0)         /* I2C master doesn't need buffer */
 #define I2C_MASTER_RX_BUF_DISABLE   (0)         /* I2C master doesn't need buffer */
 #define IMU_I2C_ADDR                (0x28)      /* BNO055 address */
@@ -62,6 +62,13 @@
 #define ACK_VAL                     (0x0)       /* I2C ack val */
 #define NACK_VAL                    (0x1)       /* I2C nack val */
 #define BUF_SIZE                    (128)       /* I2C read buf size */
+
+/**************************************/
+/* READ */
+/**************************************/
+#define READ_BUF    (36 * 1024)     /* 36kB read buf (enough for 1 minute of data) */
+#define PKT_TAIL    (0xAA)          /* packet tailer */
+#define TAIL_SZ     (6)             /* tail size is 6 bytes */
 
 /*****************************************************************************/
 /* FUNCTION DEFINITIONS */
@@ -122,3 +129,17 @@ void imu_read(char reg, uint8_t * data, size_t len);
     NOTES:              
 */
 void imu_init();
+
+/*  
+    NAME:               read
+    AURTHOR(S):         Isaac Shields
+    CALLED BY:          loop_task() in main.c
+    PURPOSE:            Reads from the IMU until there is another button pressed or 1 minute
+                        has passed.
+    CALLING CONVENTION: read(buf);
+    CONDITIONS AT EXIT: 
+    DATE STARTED:       3/9/2020
+    UPDATE HISTORY:     See Git logs.
+    NOTES:              
+*/
+void read_data(uint8_t * buf, uint16_t len);

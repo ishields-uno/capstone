@@ -22,8 +22,9 @@
 /*****************************************************************************/
 
 #include "imu.h"
-#include "driver/gpio.h"
+#include "ui.h"
 #include "driver/i2c.h"
+#include "freertos/task.h"
 
 /*****************************************************************************/
 /* CONSTANT VARIABLES */
@@ -142,4 +143,49 @@ void imu_init()
     /* PUT INTO SUSPEND MODE */
     /**************************************/
     imu_write(PWR_MODE, SUSPEND_MODE);
+}
+
+void read_data(uint8_t * buf, uint16_t len)
+{
+    int32_t space_left = len;   /* space left in buffer */
+    uint16_t i = 0;             /* data pointer */
+    uint8_t temp[LIA_REG_CNT];  /* temp buf for i2c read */
+    int j;                      /* counter */
+    uint8_t lite = 0;           /* light on or off */
+    
+    /**************************************/
+    /* WAKE FROM SUSPEND AND PUT INTO IMU */
+    /**************************************/
+    imu_write(PWR_MODE, NORMAL_MODE);
+    imu_write(OPR_MODE, IMU_MODE);
+    vTaskDelay(10 / portTICK_PERIOD_MS); /* delay to let IMU get ready */
+    
+    /**************************************/
+    /* READ UNTIL PRESS OR FULL */
+    /**************************************/
+    do
+    {
+        if (i % 10 == 0)                                /* handle led */
+            lite ^= 1;
+        gpio_set_level(RED_LED_PIN, lite);
+        imu_read(LIA_DATA_X_LSB, temp, LIA_REG_CNT);    /* take sample */
+        for (j = 0; j < LIA_REG_CNT; j++)               /* copy data to buffer */
+        {
+            buf[i] = temp[j];
+            i++;
+        }
+        space_left -= LIA_REG_CNT;                      /* decrement buffer size */
+    } while (   (gpio_get_level(START_STOP_PIN) == 1    ) /* start/stop is not pressed */
+             && (space_left > (TAIL_SZ * 2)             ) /* there is enough space in the buffer */
+            );
+    
+    /**************************************/
+    /* ADD PACKET TAIL */
+    /**************************************/
+    for(j = 0; j < TAIL_SZ; j++)
+    {
+        buf[i] = PKT_TAIL;
+        i++;
+    }
+    gpio_set_level(RED_LED_PIN, 1); /* turn light back on */
 }

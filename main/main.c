@@ -33,6 +33,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "driver/gpio.h"
+#include "esp_log.h"
 
 /*****************************************************************************/
 /* DEFINITIONS */
@@ -182,10 +183,26 @@ static void imu_calib_task()
 */
 static void loop_task()
 {
-    imu_init();
+    uint8_t data[READ_BUF];
+    
     while(1)
     {
-        vTaskDelay(500 / portTICK_PERIOD_MS);
+        if((gpio_get_level(START_STOP_PIN) == 0)) /* start/stop is pressed */
+        {
+            vTaskDelay(200 / portTICK_PERIOD_MS); /* debounce */
+            read_data(data, sizeof(data));
+            vTaskDelay(200 / portTICK_PERIOD_MS); /* debounce */
+            /* //logging
+            for (uint16_t i = 0; i < READ_BUF; i++)
+            {
+                ESP_LOGW("READ DUMP", "Byte %d: 0x%02x ", i, data[i]);
+            }
+            */
+        }
+        else
+        {
+            vTaskDelay(10 / portTICK_PERIOD_MS);    /* wait for button press */
+        }
     }
 }
 
@@ -207,13 +224,13 @@ void app_main()
     start_stop_init();
     nvs_init();
     i2c_master_init();
-    if (gpio_get_level(GPIO_NUM_33) == 0) /* if button is pressed */
+    if (gpio_get_level(START_STOP_PIN) == 0) /* if button is pressed */
     {
         xTaskCreate(imu_calib_task, "imu_calib", IMU_CALIB_SIZE, NULL, IMU_CALIB_PRIORITY, NULL);
     }
     else    /* button is not pressed */
     {
+        imu_init();
         xTaskCreate(loop_task, "loop", LOOP_SIZE, NULL, LOOP_PRIORITY, NULL);
-    }
-    
+    } 
 }
