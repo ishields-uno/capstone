@@ -25,13 +25,14 @@
 #include "ui.h"
 #include "driver/i2c.h"
 #include "freertos/task.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 /*****************************************************************************/
 /* CONSTANT VARIABLES */
 /*****************************************************************************/
 
 /* lables for calibration data stored in nonolitile memory */
-/*
 static const char * const 
 nvs_labels[NVS_LABEL_COUNT] =   {   
                                     "ACC_OFFSET_X_L", "ACC_OFFSET_X_M",
@@ -46,7 +47,7 @@ nvs_labels[NVS_LABEL_COUNT] =   {
                                     "ACC_RADIUS_L", "ACC_RADIUS_M"
                                     "MAG_RADIUS_L", "MAG_RADIUS_M"
                                 };
-                                */
+                                
                                 
 /*****************************************************************************/
 /* FUNCTION IMPLEMENTATIONS */
@@ -97,6 +98,8 @@ void imu_read(char reg, uint8_t * data, size_t len)
 
 void imu_init()
 {   
+    esp_err_t err;
+    unsigned char temp;
     
     /**************************************/
     /* PUT INTO CONFIG MODE */
@@ -126,18 +129,18 @@ void imu_init()
     // results without calibration.  This will be added later if our results are not accurate
     // enough.
     /* create nvs handle for each piece of calibration data */
-    // nvs_handle_t handles[NVS_LABEL_COUNT]; // uncomment when integrating into main program
-    //for (int i = 0; i < NVS_LABEL_COUNT; i++)
-    //{
+    nvs_handle_t handles[NVS_LABEL_COUNT]; // uncomment when integrating into main program
+    for (int i = 0; i < NVS_LABEL_COUNT; i++)
+    {
         /* open nvs */ // add error handling
-        //err = nvs_open(nvs_labels[i], NVS_READONLY, &handles[i]); // handle this error
+        err = nvs_open(nvs_labels[i], NVS_READONLY, &handles[i]); // handle this error
         /* read nvs value */
-        //err = nvs_get_u8(handles[i], nvs_labels[i], &temp);       // handle this error
+        err = nvs_get_u8(handles[i], nvs_labels[i], &temp);       // handle this error
         /* close nvs handle */
-        //err = nvs_close(handles[i]);       // handle this error
+        nvs_close(handles[i]);       // handle this error
         /* load calibration data to IMU */
-        //imu_write(ACC_OFFSET_X_LSB + i, 0x55);
-    //}
+        imu_write(ACC_OFFSET_X_LSB + i, 0x55);
+    }
 
     /**************************************/
     /* PUT INTO SUSPEND MODE */

@@ -33,7 +33,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "driver/gpio.h"
-#include "esp_log.h"
+//#include "esp_log.h"
 
 /*****************************************************************************/
 /* DEFINITIONS */
@@ -93,82 +93,6 @@ static void nvs_init()
 /*****************************************************************************/
 
 /*  
-    NAME:               imu_calib_task
-    AURTHOR(S):         Isaac Shields
-    CALLED BY:          app_main() in main.c
-    PURPOSE:            Calibrates the IMU.  IMU callibration is only needed when data seems off.  We save
-                        the calibration in the flash and load it into the IMU after every reset.  This function
-                        generates new values for the calibration.  It is only entered if the user holds the
-                        START/STOP button during power on.
-    CALLING CONVENTION: xTaskCreate(imu_calib_task, "imu_calib", IMU_CONFIG_SIZE, NULL, IMU_CONFIG_PRIORITY, NULL);
-    CONDITIONS AT EXIT: This function does not exit.
-    DATE STARTED:       2/28/2020
-    UPDATE HISTORY:     See Git logs.
-    NOTES:              NVS code used from nvs.value.example.main.c from Espessif.
-*/
-static void imu_calib_task()
-{
-    bool calib_ready = false;                   /* is system calibrated */
-    uint8_t read_buf[BUF_SIZE] = { 0 };         /* buffer for i2c read */
-    uint8_t lite = 0x00;                        /* is gyro light on or off */
-    esp_err_t err;                              /* esp error type */
-    nvs_handle_t handles[NVS_LABEL_COUNT];  /* create nvs handle for each piece of calibration data */
-    
-    // Accelerometer offsets are based on the G-Range.  The default is four.  If we change the default
-    // we need to make sure to change this.
-    
-    /**************************************/
-    /* PUT INTO IMU MODE */
-    /**************************************/
-    imu_write(OPR_MODE, IMU_MODE);
-    
-    /**************************************/
-    /* WAIT FOR IMU TO BE CALIBRATED */
-    /**************************************/
-    while(calib_ready == false)
-    {
-        /* handle LED display */
-        lite ^= 1;
-        gpio_set_level(BLUE_LED_PIN, lite);
-        vTaskDelay(500 / portTICK_PERIOD_MS); /* delay to see led changes */
-        /* read calib_stat values */
-        imu_read(CALIB_STAT, read_buf, 1);
-        /* check values */
-        if ( (read_buf[0] & ST_SYS1) && (read_buf[0] & ST_SYS1) )
-            calib_ready = true;
-    }
-    
-    /**************************************/
-    /* SWITCH TO CONFIG MODE */
-    /**************************************/
-    /* clear leds until load is complete */
-    gpio_set_level(BLUE_LED_PIN, 0);
-    /* put into config mode in order to read offset */
-    imu_write(OPR_MODE, CONFIG_MODE);
-    
-    /**************************************/
-    /* LOAD OFFSET VALUES INTO NVS */
-    /**************************************/
-    /* read offset values */
-    imu_read(ACC_OFFSET_X_LSB, read_buf, NVS_LABEL_COUNT);
-    /* load offsets into nvs */
-    //for (int i = 0; i < NVS_LABEL_COUNT; i++)
-    //{
-    //    err = nvs_open(nvs_labels[i], NVS_READWRITE, &handles[i]);  /* open nvs */ // add error handling
-    //    err = nvs_set_u8(handles[i], nvs_labels[i], read_buf[i]);   /* write nvs */   // do error checking
-    //    err = nvs_commit(handles[i]);                               /* commit changes */ // do error checking
-    //    nvs_close(handles[i]);                                      /* close the handle */ // do error checking
-    //}
-    /* show that load is complete */
-    gpio_set_level(BLUE_LED_PIN, 1);
-    
-    while(1)
-    {
-        vTaskDelay(500 / portTICK_PERIOD_MS);
-    }
-}
-
-/*  
     NAME:               loop_task
     AURTHOR(S):         Isaac Shields
     CALLED BY:          app_main() in main.c
@@ -185,24 +109,34 @@ static void imu_calib_task()
 */
 static void loop_task()
 {
-    uint8_t data[READ_BUF];
+    uint8_t imu_data[READ_BUF];
     
     while(1)
     {
-        if((gpio_get_level(START_STOP_PIN) == 0)) /* start/stop is pressed */
-        {
-            vTaskDelay(200 / portTICK_PERIOD_MS); /* debounce */
-            read_data(data, sizeof(data));
-            vTaskDelay(200 / portTICK_PERIOD_MS); /* debounce */
-            /* //logging
-            for (uint16_t i = 0; i < READ_BUF; i++)
-            {
-                ESP_LOGW("READ DUMP", "Byte %d: 0x%02x ", i, data[i]);
-            }
-            */
+        /**************************************/
+        /* IMU SUSPENDED SO IT SHOULD NOT RESPOND*/
+        /**************************************/
+        while ((gpio_get_level(START_STOP_PIN) == 1))
+        {       
+            vTaskDelay(10 / portTICK_PERIOD_MS);    /* wait for button press */
         }
-        else
-        {
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+        imu_init();
+        imu_read(ACC_OFFSET_X_LSB, imu_data, NVS_LABEL_COUNT);
+        
+        /**************************************/
+        /* UNSUSPEND SO IT SHOULD RESPOND*/
+        /**************************************/
+        while ((gpio_get_level(START_STOP_PIN) == 1))
+        {       
+            vTaskDelay(10 / portTICK_PERIOD_MS);    /* wait for button press */
+        }
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+        imu_write(PWR_MODE, NORMAL_MODE);
+        imu_read(ACC_OFFSET_X_LSB, imu_data, NVS_LABEL_COUNT);
+        
+        while ((gpio_get_level(START_STOP_PIN) == 1))
+        {       
             vTaskDelay(10 / portTICK_PERIOD_MS);    /* wait for button press */
         }
     }
@@ -226,13 +160,5 @@ void app_main()
     start_stop_init();
     nvs_init();
     i2c_master_init();
-    if (gpio_get_level(START_STOP_PIN) == 0) /* if button is pressed */
-    {
-        xTaskCreatePinnedToCore(imu_calib_task, "imu_calib", IMU_CALIB_SIZE, NULL, IMU_CALIB_PRIORITY, NULL, APP_CPU_NUM);
-    }
-    else    /* button is not pressed */
-    {
-        imu_init();
-        xTaskCreatePinnedToCore(loop_task, "loop", LOOP_SIZE, NULL, LOOP_PRIORITY, NULL, APP_CPU_NUM);
-    } 
+    xTaskCreatePinnedToCore(loop_task, "loop", LOOP_SIZE, NULL, LOOP_PRIORITY, NULL, APP_CPU_NUM);
 }
