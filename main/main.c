@@ -111,34 +111,30 @@ static void loop_task()
 {
     uint8_t imu_data[READ_BUF];
     
-    while(1)
-    {
-        /**************************************/
-        /* IMU SUSPENDED SO IT SHOULD NOT RESPOND*/
-        /**************************************/
-        while ((gpio_get_level(START_STOP_PIN) == 1))
-        {       
-            vTaskDelay(10 / portTICK_PERIOD_MS);    /* wait for button press */
-        }
-        vTaskDelay(500 / portTICK_PERIOD_MS);
-        imu_init();
-        imu_read(ACC_OFFSET_X_LSB, imu_data, NVS_LABEL_COUNT);
-        
-        /**************************************/
-        /* UNSUSPEND SO IT SHOULD RESPOND*/
-        /**************************************/
-        while ((gpio_get_level(START_STOP_PIN) == 1))
-        {       
-            vTaskDelay(10 / portTICK_PERIOD_MS);    /* wait for button press */
-        }
-        vTaskDelay(500 / portTICK_PERIOD_MS);
-        imu_write(PWR_MODE, NORMAL_MODE);
-        imu_read(ACC_OFFSET_X_LSB, imu_data, NVS_LABEL_COUNT);
-        
-        while ((gpio_get_level(START_STOP_PIN) == 1))
-        {       
-            vTaskDelay(10 / portTICK_PERIOD_MS);    /* wait for button press */
-        }
+    /**************************************/
+    /* CHECK IMU INITIALIZATION*/
+    /**************************************/
+    while ((gpio_get_level(START_STOP_PIN) == 1))
+    {       
+        vTaskDelay(10 / portTICK_PERIOD_MS);    /* wait for button press */
+    }
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+    imu_init();
+    
+    /**************************************/
+    /* UNSUSPEND SO IT SHOULD RESPOND*/
+    /**************************************/
+    while ((gpio_get_level(START_STOP_PIN) == 1))
+    {       
+        vTaskDelay(10 / portTICK_PERIOD_MS);    /* wait for button press */
+    }
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+    imu_write(PWR_MODE, NORMAL_MODE);
+    imu_read(ACC_OFFSET_X_LSB, imu_data, NVS_LABEL_COUNT);
+    
+    while (1)
+    {       
+        vTaskDelay(10 / portTICK_PERIOD_MS);    /* stay */
     }
 }
 
