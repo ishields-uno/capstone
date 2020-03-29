@@ -34,6 +34,7 @@
 #include "nvs.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "ble.h"
 
 /*****************************************************************************/
 /* DEFINITIONS */
@@ -111,8 +112,8 @@ static void imu_calib_task()
     bool calib_ready = false;                   /* is system calibrated */
     uint8_t read_buf[BUF_SIZE] = { 0 };         /* buffer for i2c read */
     uint8_t lite = 0x00;                        /* is gyro light on or off */
-    esp_err_t err;                              /* esp error type */
-    nvs_handle_t handles[NVS_LABEL_COUNT];  /* create nvs handle for each piece of calibration data */
+    //esp_err_t err;                              /* esp error type */
+    //nvs_handle_t handles[NVS_LABEL_COUNT];  /* create nvs handle for each piece of calibration data */
     
     // Accelerometer offsets are based on the G-Range.  The default is four.  If we change the default
     // we need to make sure to change this.
@@ -225,6 +226,7 @@ void app_main()
     led_init();
     start_stop_init();
     nvs_init();
+    ble_init();
     i2c_master_init();
     if (gpio_get_level(START_STOP_PIN) == 0) /* if button is pressed */
     {
