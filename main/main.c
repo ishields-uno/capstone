@@ -35,6 +35,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "ble.h"
+#include "esp_gatts_api.h"
 
 /*****************************************************************************/
 /* DEFINITIONS */
@@ -187,6 +188,7 @@ static void imu_calib_task()
 static void loop_task()
 {
     uint8_t data[READ_BUF];
+    uint8_t test[4] = { 0xAA, 0x55, 0xAA, 0x55};
     
     while(1)
     {
@@ -195,6 +197,9 @@ static void loop_task()
             vTaskDelay(200 / portTICK_PERIOD_MS); /* debounce */
             read_data(data, sizeof(data));
             vTaskDelay(200 / portTICK_PERIOD_MS); /* debounce */
+            /* notify the phone of new data */
+            esp_ble_gatts_send_indicate(heart_rate_profile_tab[PROFILE_APP_IDX].gatts_if, heart_rate_profile_tab[PROFILE_APP_IDX].conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A],
+                                                sizeof(test), test, false);
             /* //logging
             for (uint16_t i = 0; i < READ_BUF; i++)
             {
