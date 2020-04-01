@@ -23,7 +23,7 @@
 /* The max length of characteristic value. When the GATT client performs a write or prepare write operation,
 *  the data length must be less than GATTS_DEMO_CHAR_VAL_LEN_MAX. 
 */
-#define GATTS_DEMO_CHAR_VAL_LEN_MAX 2401
+#define GATTS_DEMO_CHAR_VAL_LEN_MAX 512
 #define PREPARE_BUF_MAX_SIZE        1024
 #define CHAR_DECLARATION_SIZE       (sizeof(uint8_t))
 

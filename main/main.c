@@ -187,8 +187,13 @@ static void imu_calib_task()
 */
 static void loop_task()
 {
-    uint8_t data[READ_BUF];
-    uint8_t test[4] = { 0xAA, 0x55, 0xAA, 0x55};
+    uint8_t data[READ_BUF];                             /* imu data buffer */
+    uint8_t NEW_DATA[2] = { 'N', 'C'};            /* new data from device */
+    uint8_t READ_MORE_DATA[2] = { 'N', 'N'};      /* more data to be read */
+    uint8_t STOP_READING_DATA[2] = { 'N', 'P'};   /* no more data to read */
+    uint8_t dumy[511] = { 'D' };                        // temporary test data
+    uint8_t * temp;                                // temporary test data
+    uint16_t length;                                 // temporary test data length
     
     while(1)
     {
@@ -197,9 +202,40 @@ static void loop_task()
             vTaskDelay(200 / portTICK_PERIOD_MS); /* debounce */
             read_data(data, sizeof(data));
             vTaskDelay(200 / portTICK_PERIOD_MS); /* debounce */
+            
             /* notify the phone of new data */
-            esp_ble_gatts_send_indicate(heart_rate_profile_tab[PROFILE_APP_IDX].gatts_if, heart_rate_profile_tab[PROFILE_APP_IDX].conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A],
-                                                sizeof(test), test, false);
+            esp_ble_gatts_send_indicate (   heart_rate_profile_tab[PROFILE_APP_IDX].gatts_if, 
+                                            heart_rate_profile_tab[PROFILE_APP_IDX].conn_id, 
+                                            heart_rate_handle_table[IDX_CHAR_VAL_A],
+                                            sizeof(NEW_DATA), NEW_DATA, false
+                                        );
+                                                
+            for (int i = 0; i < 47; i++)
+            {
+                dumy[1] = i;
+                esp_ble_gatts_set_attr_value(heart_rate_handle_table[IDX_CHAR_VAL_A], sizeof(dumy), dumy);
+                
+                do
+                {
+                    esp_ble_gatts_get_attr_value(heart_rate_handle_table[IDX_CHAR_VAL_A], &length, &temp);
+                    vTaskDelay(10 / portTICK_PERIOD_MS);    /* don't spin on this */
+                } while(*temp != 0x55);
+                
+                esp_ble_gatts_send_indicate (    heart_rate_profile_tab[PROFILE_APP_IDX].gatts_if, 
+                                                heart_rate_profile_tab[PROFILE_APP_IDX].conn_id, 
+                                                heart_rate_handle_table[IDX_CHAR_VAL_A],
+                                                sizeof(READ_MORE_DATA), READ_MORE_DATA, false
+                                            );
+            }
+            
+            /* notify phone to stop reading data */
+            esp_ble_gatts_send_indicate (   heart_rate_profile_tab[PROFILE_APP_IDX].gatts_if, 
+                                            heart_rate_profile_tab[PROFILE_APP_IDX].conn_id, 
+                                            heart_rate_handle_table[IDX_CHAR_VAL_A],
+                                            sizeof(STOP_READING_DATA), STOP_READING_DATA, false
+                                        );
+            
+            /* esp_ble_gatts_set_attr_value(heart_rate_handle_table[IDX_CHAR_VAL_A], sizeof(test), test); */
             /* //logging
             for (uint16_t i = 0; i < READ_BUF; i++)
             {
