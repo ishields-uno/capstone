@@ -1,98 +1,130 @@
-/*
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
+/*  
+    TITLE:          BLE
+    VERSION:        See Git logs.
+    FILENAME:       ble.c
+    AURTHOR(S):     Isaac Shields
+    PURPOSE:        Handles all BLE related tasks.  Contains initialization function for the
+                    BLE module.  Handles creation of the custom BLE profile.  Handles all read
+                    and write requests for the BLE.  Handles all connection establishment and
+                    maintaining.
+    HOW TO LOAD:    DEV BOARD-
+                    Build in the project directory using "idf.py build"  Load to
+                    the board using "idf.py -p PORT flash".  PORT should be replaced
+                    with the serial port you are on (COM1, COM2, etc.).
+                    PRODUCT-
+                    In progress.
+    DATE STARTED:   3/5/2020
+    UPDATE HISTORY: See Git logs.
+    NOTES:          This program uses example code provided by Espessif Systems.
+                    The GitHub containing this code is found here: 
+                    https://github.com/espressif/esp-idf
 */
 
-/****************************************************************************
-*
-* This demo showcases creating a GATT database using a predefined attribute table.
-* It acts as a GATT server and can send adv data, be connected by client.
-* Run the gatt_client demo, the client demo will automatically connect to the gatt_server_service_table demo.
-* Client demo will enable GATT server's notify after connection. The two devices will then exchange
-* data.
-*
-****************************************************************************/
+/*****************************************************************************/
+/* INCLUDES */
+/*****************************************************************************/
 
-
- #include "freertos/FreeRTOS.h"
- #include "freertos/task.h"
- #include "freertos/event_groups.h"
- #include "esp_system.h"
- #include "esp_log.h"
- #include "nvs_flash.h"
- #include "esp_bt.h"
-
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/event_groups.h"
+#include "esp_system.h"
+#include "esp_log.h"
+#include "nvs_flash.h"
+#include "esp_bt.h"
 #include "esp_gap_ble_api.h"
 #include "esp_bt_main.h"
 #include "ble.h"
 #include "esp_gatt_common_api.h"
 
-static uint8_t adv_config_done       = 0;
+/*****************************************************************************/
+/* TYPES */
+/*****************************************************************************/
 
-uint16_t heart_rate_handle_table[HRS_IDX_NB];
-
+/* prepare write structure */
 typedef struct {
     uint8_t                 *prepare_buf;
     int                     prepare_len;
 } prepare_type_env_t;
 
+/*****************************************************************************/
+/* GLOBAL VARIABLES */
+/*****************************************************************************/
+
+/**************************************/
+/* MISCELLANEOUS */
+/**************************************/
+
+/* advertisment config flag */
+static uint8_t adv_config_done = 0;
+
+/* profile table */
+uint16_t heart_rate_handle_table[HRS_IDX_NB];
+
+/* prepare write structure */
 static prepare_type_env_t prepare_write_env;
 
-/* uuid is 961c2d70-6bd8-11ea-bc55-0242ac130003 */
+/* uuid for the service is 961c2d70-6bd8-11ea-bc55-0242ac130003 */
 static uint8_t service_uuid[16] = {
     /* LSB <--------------------------------------------------------------------------------> MSB */
     //first uuid, 16bit, [12],[13] is the value
     0x03, 0x00, 0x13, 0xac, 0x42, 0x02, 0x55, 0xbc, 0xea, 0x11, 0xd8, 0x6b, 0x70, 0x2d, 0x1c, 0x96,
 };
 
-/* The length of adv data must be less than 31 bytes */
+/**************************************/
+/* ADVERTISING */
+/**************************************/
+
+/* Data sent in advertising mode */
+/* NOTE: The length of adv data must be less than 31 bytes */
 static esp_ble_adv_data_t adv_data = {
-    .set_scan_rsp        = false,
-    .include_name        = true,
-    .include_txpower     = true,
-    .min_interval        = 16, //slave connection min interval, Time = min_interval * 1.25 msec
-    .max_interval        = 16, //slave connection max interval, Time = max_interval * 1.25 msec
-    .appearance          = 0x00,
-    .manufacturer_len    = 0,    //TEST_MANUFACTURER_DATA_LEN,
-    .p_manufacturer_data = NULL, //test_manufacturer,
-    .service_data_len    = 0,
+    .set_scan_rsp        = false,                                           /* normal advertising data */
+    .include_name        = true,                                            /* advertise device name */
+    .include_txpower     = true,                                            /* advertise tx power */
+    .min_interval        = 16,                                              /* Advertising interval.  iOS needs 20mS interval*/
+    .max_interval        = 16,                                              /* NOTE: Time = interval * 1.25 msec */
+    .appearance          = 0x00,                                            /* apperance type is undefined */
+    .manufacturer_len    = 0,                                               /* no manufacturer data */
+    .p_manufacturer_data = NULL,
+    .service_data_len    = 0,                                               /* no service data for advertising */
     .p_service_data      = NULL,
-    .service_uuid_len    = sizeof(service_uuid),
-    .p_service_uuid      = service_uuid,
-    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
+    .service_uuid_len    = sizeof(service_uuid),                            /* length of uuid is full 128 bits */
+    .p_service_uuid      = service_uuid,                                    /* service uuid */
+    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),   /* generic discovery and no BREDR support */
 };
 
-// scan response data
+/* Data sent for scan response (same as advertising data) */
 static esp_ble_adv_data_t scan_rsp_data = {
-    .set_scan_rsp        = true,
-    .include_name        = true,
-    .include_txpower     = true,
-    .min_interval        = 16,
-    .max_interval        = 16,
-    .appearance          = 0x00,
-    .manufacturer_len    = 0, //TEST_MANUFACTURER_DATA_LEN,
-    .p_manufacturer_data = NULL, //&test_manufacturer[0],
-    .service_data_len    = 0,
+    .set_scan_rsp        = true,                                            /* set as scan response */
+    .include_name        = true,                                            /* advertise device name */
+    .include_txpower     = true,                                            /* advertise tx power */
+    .min_interval        = 16,                                              /* Advertising interval.  iOS needs 20mS interval*/
+    .max_interval        = 16,                                              /* NOTE: Time = interval * 1.25 msec */
+    .appearance          = 0x00,                                            /* apperance type is undefined */
+    .manufacturer_len    = 0,                                               /* no manufacturer data */
+    .p_manufacturer_data = NULL,
+    .service_data_len    = 0,                                               /* no service data for advertising */
     .p_service_data      = NULL,
-    .service_uuid_len    = sizeof(service_uuid),
-    .p_service_uuid      = service_uuid,
-    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
+    .service_uuid_len    = sizeof(service_uuid),                            /* length of uuid is full 128 bits */
+    .p_service_uuid      = service_uuid,                                    /* service uuid */
+    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),   /* generic discovery and no BREDR support */
 };
 
 static esp_ble_adv_params_t adv_params = {
-    .adv_int_min         = 0x20,
-    .adv_int_max         = 0x40,
-    .adv_type            = ADV_TYPE_IND,
-    .own_addr_type       = BLE_ADDR_TYPE_PUBLIC,
-    .channel_map         = ADV_CHNL_ALL,
-    .adv_filter_policy   = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
+    .adv_int_min         = 0x20,                                /* advertising interval allowed between 20ms - 40ms */
+    .adv_int_max         = 0x40,                                /* NOTE: Time = interval * 0.625 msec */
+    .adv_type            = ADV_TYPE_IND,                        /* indirect advertising */
+    .own_addr_type       = BLE_ADDR_TYPE_PUBLIC,                /* public address */
+    .channel_map         = ADV_CHNL_ALL,                        /* advertise on all channels */
+    .adv_filter_policy   = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,   /* no filter policty */
 };
 
+// put this in the header file
 static void gatts_profile_event_handler(esp_gatts_cb_event_t event,
 					esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param);
+
+/**************************************/
+/* SERVICE AND ATTRIBUTE TABLE*/
+/**************************************/
 
 /* One gatt-based profile one app_id and one gatts_if, this array will store the gatts_if returned by ESP_GATTS_REG_EVT */
 struct gatts_profile_inst heart_rate_profile_tab[PROFILE_NUM] = {
@@ -101,22 +133,23 @@ struct gatts_profile_inst heart_rate_profile_tab[PROFILE_NUM] = {
         .gatts_if = ESP_GATT_IF_NONE,       /* Not get the gatt_if, so initial is ESP_GATT_IF_NONE */
     },
 };
-
-/* Service */
-static const uint8_t GATTS_SERVICE_UUID_TEST[ESP_UUID_LEN_128]      = { 0x03, 0x00, 0x13, 0xac, 0x42, 0x02, 0x55, 0xbc, 0xea, 0x11, 0xd8, 0x6b, 0x70, 0x2d, 0x1c, 0x96 };
-static const uint8_t CHAR_UUID_TEST[ESP_UUID_LEN_128]      = { 0x03, 0x00, 0x13, 0xac, 0x42, 0x02, 0x55, 0xbc, 0xea, 0x11, 0xd8, 0x6b, 0x71, 0x2d, 0x1c, 0x96 };
-
+/* Our Service UUID */
+static const uint8_t GATTS_SERVICE_UUID_TEST[ESP_UUID_LEN_128]  = { 0x03, 0x00, 0x13, 0xac, 0x42, 0x02, 0x55, 0xbc, 0xea, 0x11, 0xd8, 0x6b, 0x70, 0x2d, 0x1c, 0x96 };
+/* Our Characteristic UUID */
+static const uint8_t CHAR_UUID_TEST[ESP_UUID_LEN_128]           = { 0x03, 0x00, 0x13, 0xac, 0x42, 0x02, 0x55, 0xbc, 0xea, 0x11, 0xd8, 0x6b, 0x71, 0x2d, 0x1c, 0x96 };
+/* Generic Service UUID */
 static const uint16_t primary_service_uuid         = ESP_GATT_UUID_PRI_SERVICE;
+/* Characteristic Declaration UUID */
 static const uint16_t character_declaration_uuid   = ESP_GATT_UUID_CHAR_DECLARE;
+/* Characteristic CCD UUID */
 static const uint16_t character_client_config_uuid = ESP_GATT_UUID_CHAR_CLIENT_CONFIG;
-//static const uint8_t char_prop_read                =  ESP_GATT_CHAR_PROP_BIT_READ;
-//static const uint8_t char_prop_write               = ESP_GATT_CHAR_PROP_BIT_WRITE;
+/* Flags for READ/WRITE/NOTIFY permissions */
 static const uint8_t char_prop_read_write_notify   = ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_NOTIFY;
+/* Flags for CCC */
 static const uint8_t heart_measurement_ccc[2]      = {0x00, 0x00};
-static const uint8_t char_value[2]                 = { 'D' };
-
-
-/* Full Database Description - Used to add attributes into the database */
+/* Initial char value */
+static const uint8_t char_value[511]                 = { 'D' }; // get rid of magic letter
+/* Attribute Table */
 static const esp_gatts_attr_db_t gatt_db[HRS_IDX_NB] =
 {
     // Service Declaration
@@ -140,6 +173,10 @@ static const esp_gatts_attr_db_t gatt_db[HRS_IDX_NB] =
     {{ESP_GATT_AUTO_RSP}, {ESP_UUID_LEN_16, (uint8_t *)&character_client_config_uuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
       sizeof(uint16_t), sizeof(heart_measurement_ccc), (uint8_t *)heart_measurement_ccc}},
 };
+
+/*****************************************************************************/
+/* FUNCTION IMPLEMENTATIONS */
+/*****************************************************************************/
 
 void example_prepare_write_event_env(esp_gatt_if_t gatts_if, prepare_type_env_t *prepare_write_env, esp_ble_gatts_cb_param_t *param)
 {
@@ -253,13 +290,13 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             if (set_dev_name_ret){
                 ESP_LOGE(GATTS_TABLE_TAG, "set device name failed, error code = %x", set_dev_name_ret);
             }
-            //config adv data
+            /*config adv data */
             esp_err_t ret = esp_ble_gap_config_adv_data(&adv_data);
             if (ret){
                 ESP_LOGE(GATTS_TABLE_TAG, "config adv data failed, error code = %x", ret);
             }
             adv_config_done |= ADV_CONFIG_FLAG;
-            //config scan response data
+            /*config scan response data */
             ret = esp_ble_gap_config_adv_data(&scan_rsp_data);
             if (ret){
                 ESP_LOGE(GATTS_TABLE_TAG, "config scan response data failed, error code = %x", ret);
@@ -277,7 +314,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
        	    break;
         case ESP_GATTS_WRITE_EVT:
             if (!param->write.is_prep){
-                // the data length of gattc write  must be less than GATTS_DEMO_CHAR_VAL_LEN_MAX.
+                /* the data length of gattc write  must be less than GATTS_DEMO_CHAR_VAL_LEN_MAX. */
                 ESP_LOGI(GATTS_TABLE_TAG, "GATT_WRITE_EVT, handle = %d, value len = %d, value :", param->write.handle, param->write.len);
                 esp_log_buffer_hex(GATTS_TABLE_TAG, param->write.value, param->write.len);
                 if (heart_rate_handle_table[IDX_CHAR_CFG_A] == param->write.handle && param->write.len == 2){
@@ -289,7 +326,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
                         {
                             notify_data[i] = i % 0xff;
                         }
-                        //the size of notify_data[] need less than MTU size
+                        /*the size of notify_data[] need less than MTU size */
                         esp_ble_gatts_send_indicate(gatts_if, param->write.conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A],
                                                 sizeof(notify_data), notify_data, false);
                     }else if (descr_value == 0x0002){
@@ -299,7 +336,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
                         {
                             indicate_data[i] = i % 0xff;
                         }
-                        //the size of indicate_data[] need less than MTU size
+                        /* the size of indicate_data[] need less than MTU size */
                         esp_ble_gatts_send_indicate(gatts_if, param->write.conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A],
                                             sizeof(indicate_data), indicate_data, true);
                     }
@@ -321,7 +358,7 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             }
       	    break;
         case ESP_GATTS_EXEC_WRITE_EVT: 
-            // the length of gattc prepare write data must be less than GATTS_DEMO_CHAR_VAL_LEN_MAX. 
+            /* the length of gattc prepare write data must be less than GATTS_DEMO_CHAR_VAL_LEN_MAX. */ 
             ESP_LOGI(GATTS_TABLE_TAG, "ESP_GATTS_EXEC_WRITE_EVT");
             example_exec_write_event_env(&prepare_write_env, param);
             break;
@@ -341,10 +378,10 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
             memcpy(conn_params.bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
             /* For the iOS system, please refer to Apple official documents about the BLE connection parameters restrictions. */
             conn_params.latency = 0;
-            conn_params.max_int = 24;    // max_int = 24*1.25ms = 30ms
-            conn_params.min_int = 12;    // min_int = 12*1.25ms = 15ms
-            conn_params.timeout = 400;    // timeout = 400*10ms = 4000ms
-            //start sent the update connection parameters to the peer device.
+            conn_params.max_int = 24;   /* max_int = 24*1.25ms = 30ms (required for iOS) */
+            conn_params.min_int = 12;   /* min_int = 12*1.25ms = 15ms (required for iOS) */
+            conn_params.timeout = 400;  /* timeout = 400*10ms = 4000ms (required for iOS) */
+            /* start sent the update connection parameters to the peer device. */
             esp_ble_gap_update_conn_params(&conn_params);
             break;
         case ESP_GATTS_DISCONNECT_EVT:
@@ -382,7 +419,6 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
 
 static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param)
 {
-
     /* If event is register event, store the gatts_if for each profile */
     if (event == ESP_GATTS_REG_EVT) {
         if (param->reg.status == ESP_GATT_OK) {
