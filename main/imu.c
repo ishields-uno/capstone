@@ -56,9 +56,9 @@ void i2c_master_init()
     i2c_config_t conf;
     conf.mode = I2C_MODE_MASTER;
     conf.sda_io_num = GPIO_NUM_21;
-    conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+    conf.sda_pullup_en = GPIO_PULLUP_DISABLE;
     conf.scl_io_num = GPIO_NUM_22;
-    conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+    conf.scl_pullup_en = GPIO_PULLUP_DISABLE;
     conf.master.clk_speed = I2C_FREQ;
     i2c_param_config(I2C_NUM_0, &conf);
     i2c_driver_install(I2C_NUM_0, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
@@ -165,7 +165,7 @@ void read_data(uint8_t * buf, uint16_t len)
     /**************************************/
     do
     {
-        if (i % 10 == 0)                                /* handle led */
+        if (i % 20 == 0)                                /* handle led */
             lite ^= 1;
         gpio_set_level(RED_LED_PIN, lite);
         imu_read(LIA_DATA_X_LSB, temp, LIA_REG_CNT);    /* take sample */

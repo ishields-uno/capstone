@@ -51,6 +51,7 @@
 #define APP_CPU_NUM         (1)                         /* application cpu number */
 
 /* LOOP TASK */
+#define SEND_BUF        (509)       /* size of BLE MTU */
 
 
 /* IMU CALIB TASK */
@@ -187,21 +188,27 @@ static void imu_calib_task()
 */
 static void loop_task()
 {
+    uint8_t NEW_DATA[2] = { 'N', 'C'};                  /* new data from device */
+    uint8_t READ_MORE_DATA[2] = { 'N', 'N'};            /* more data to be read */
+    uint8_t STOP_READING_DATA[2] = { 'N', 'P'};         /* no more data to read */
+    
     uint8_t data[READ_BUF];                             /* imu data buffer */
-    uint8_t NEW_DATA[2] = { 'N', 'C'};            /* new data from device */
-    uint8_t READ_MORE_DATA[2] = { 'N', 'N'};      /* more data to be read */
-    uint8_t STOP_READING_DATA[2] = { 'N', 'P'};   /* no more data to read */
-    uint8_t dumy[511] = { 'D' };                        // temporary test data
-    uint8_t * temp;                                // temporary test data
-    uint16_t length;                                 // temporary test data length
+    uint8_t send[SEND_BUF] = { 'D' };                   /* buffer for sending data over bluetooth */
+    bool done = false;                                  /* have we sent all the data? */
+    int i = 0;                                          /* iterator to track single packet size*/
+    int j = 0;                                          /* iterator to track total data size*/
+    const uint8_t * ret;                                /* buffer for iPhone response */
+    uint16_t ret_length;                                /* length of iPhone response */
     
     while(1)
     {
         if((gpio_get_level(START_STOP_PIN) == 0)) /* start/stop is pressed */
         {
+            ESP_LOGW("TRANSFER TEST:", "Started reading from IMU.");
             vTaskDelay(200 / portTICK_PERIOD_MS); /* debounce */
             read_data(data, sizeof(data));
             vTaskDelay(200 / portTICK_PERIOD_MS); /* debounce */
+            ESP_LOGW("TRANSFER TEST:", "Stopped reading from IMU.");
             
             /* notify the phone of new data */
             esp_ble_gatts_send_indicate (   heart_rate_profile_tab[PROFILE_APP_IDX].gatts_if, 
@@ -210,23 +217,52 @@ static void loop_task()
                                             sizeof(NEW_DATA), NEW_DATA, false
                                         );
                                                 
-            for (int i = 0; i < 47; i++)
+            do
             {
-                dumy[1] = i;
-                esp_ble_gatts_set_attr_value(heart_rate_handle_table[IDX_CHAR_VAL_A], sizeof(dumy), dumy);
+                /* transfer data into the send buffer */
+                for (i = 1; i < SEND_BUF; i += 4, j += 6)
+                {
+                    /* if we hit the packet tail, say we are done and break */
+                    if  (   
+                            (data[j] == PKT_TAIL) && (data[j + 1] == PKT_TAIL) &&
+                            (data[j + 2] == PKT_TAIL) && (data[j + 3] == PKT_TAIL)
+                        )
+                    {
+                        ESP_LOGW("TRANSFER TEST:", "Hit end of data at j = %d.", j);
+                        done = true;
+                        break;
+                    }
+                    /* load the next samples */
+                    else
+                    {
+                        send[i] = data[j];
+                        send[i + 1] = data[j + 1];
+                        send[i + 2] = data[j + 2];
+                        send[i + 3] = data[j + 3];
+                    }
+                }
                 
+                ESP_LOGW("TRANSFER TEST:", "Loaded packet with %d bytes.  %d bytes have been processed.", i, j);
+                ESP_LOGW("TRANSFER TEST:", "Packet value: %.*s", SEND_BUF, send);
+                
+                /* wait to see if the phone has processed the previous packet */
                 do
                 {
-                    esp_ble_gatts_get_attr_value(heart_rate_handle_table[IDX_CHAR_VAL_A], &length, &temp);
+                    esp_ble_gatts_get_attr_value(heart_rate_handle_table[IDX_CHAR_VAL_A], &ret_length, &ret);
                     vTaskDelay(10 / portTICK_PERIOD_MS);    /* don't spin on this */
-                } while(*temp != 0x55);
+                } while(*ret != 0x55);
                 
-                esp_ble_gatts_send_indicate (    heart_rate_profile_tab[PROFILE_APP_IDX].gatts_if, 
+                ESP_LOGW("TRANSFER TEST:", "Received read ready signal from the iPhone.");
+                
+                /* update the characteristic and notify the phone that it can read more data */
+                esp_ble_gatts_set_attr_value(heart_rate_handle_table[IDX_CHAR_VAL_A], i + 1, send);
+                esp_ble_gatts_send_indicate (   heart_rate_profile_tab[PROFILE_APP_IDX].gatts_if, 
                                                 heart_rate_profile_tab[PROFILE_APP_IDX].conn_id, 
                                                 heart_rate_handle_table[IDX_CHAR_VAL_A],
                                                 sizeof(READ_MORE_DATA), READ_MORE_DATA, false
                                             );
-            }
+                ESP_LOGW("TRANSFER TEST:", "Characteristic value updated, ready to be read.");
+            } while(done != true);
             
             /* notify phone to stop reading data */
             esp_ble_gatts_send_indicate (   heart_rate_profile_tab[PROFILE_APP_IDX].gatts_if, 
@@ -235,13 +271,8 @@ static void loop_task()
                                             sizeof(STOP_READING_DATA), STOP_READING_DATA, false
                                         );
             
-            /* esp_ble_gatts_set_attr_value(heart_rate_handle_table[IDX_CHAR_VAL_A], sizeof(test), test); */
-            /* //logging
-            for (uint16_t i = 0; i < READ_BUF; i++)
-            {
-                ESP_LOGW("READ DUMP", "Byte %d: 0x%02x ", i, data[i]);
-            }
-            */
+            /* reset data pointer */
+            j = 0;
         }
         else
         {
